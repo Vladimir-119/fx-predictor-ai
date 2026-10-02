@@ -1,0 +1,29 @@
+# Git и настройки GitHub
+.git
+.github
+
+# Локальное окружение и секреты
+.venv
+.env
+.env.*
+!.env.example
+
+# Кеш Python и инструментов проверки
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.ruff_cache
+
+# Отчёты о покрытии тестами
+.coverage*
+coverage.xml
+htmlcov
+
+# Результаты сборки пакета
+build
+dist
+*.egg-info
+
+# Тесты и дополнительная документация
+tests
+docs
