@@ -1,5 +1,10 @@
 # fx-predictor-ai
 
+Авторы проекта:
+
+- Volkov Vladimir — Telegram [@The_Valdemare](https://t.me/The_Valdemare), [thevaldemare1@gmail.com](mailto:thevaldemare1@gmail.com).
+- Vagin Arseniy — Telegram [@quitepeaky](https://t.me/quitepeaky), [arseniyjvagin@gmail.com](mailto:arseniyjvagin@gmail.com).
+
 Проект для прогнозирования валютных курсов. Текущая версия содержит асинхронный API на FastAPI, подключение к PostgreSQL, проверки состояния сервисов, JSON-логи и CI/CD. Модель прогнозирования пока не реализована.
 
 Используем Python 3.12, uv, FastAPI, asyncpg, PostgreSQL 16, Ruff, pytest, pre-commit и Docker Compose.
