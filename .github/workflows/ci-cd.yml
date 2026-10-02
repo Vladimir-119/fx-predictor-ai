@@ -138,6 +138,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      image: ${{ steps.image.outputs.name }}
     steps:
       - uses: actions/checkout@v6
       - name: Prepare image name and tags
@@ -190,3 +192,29 @@ jobs:
             echo "Digest: $IMAGE_DIGEST"
             echo "Pull exact build: docker pull $IMAGE_NAME@$IMAGE_DIGEST"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: Create GitHub Release
+    needs: [quality, publish]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Publish release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          IMAGE: ${{ needs.publish.outputs.image }}:${{ needs.quality.outputs.version }}
+        run: |
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists."
+            exit 0
+          fi
+          gh release create "$RELEASE_TAG" \
+            --verify-tag \
+            --title "$RELEASE_TAG" \
+            --generate-notes \
+            --notes "Download the Docker image: docker pull $IMAGE"
