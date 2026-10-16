@@ -20,7 +20,9 @@ WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH" \
     VIRTUAL_ENV="/app/.venv" \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD=false \
+    MLFLOW_ENABLE_PROXY_MULTIPART_UPLOAD=false
 LABEL org.opencontainers.image.title="fx-predictor-ai"
 
 # Приложение работает от отдельного пользователя без прав root.

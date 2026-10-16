@@ -1,5 +1,9 @@
 UV = uv run --extra web --extra ml
 
+# RustFS доступен клиентам через MLflow, без прямых S3-ссылок.
+export MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD = false
+export MLFLOW_ENABLE_PROXY_MULTIPART_UPLOAD = false
+
 .PHONY: install hooks fmt lint test check db infra dataset eda train import-rates update-rates worker run up down logs psql inspect integration restart-api
 
 install:
