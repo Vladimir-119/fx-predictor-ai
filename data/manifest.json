@@ -1,0 +1,12 @@
+{
+  "provider": "AllRatesToday / European Central Bank",
+  "dataset_version": 131,
+  "source": "https://www.kaggle.com/datasets/allratestoday/central-bank-exchange-rates/versions/131?select=ecb.csv",
+  "download_url": "https://www.kaggle.com/api/v1/datasets/download/allratestoday/central-bank-exchange-rates/ecb.csv?datasetVersionNumber=131",
+  "sha256": "38362780d69ddecdb45484279fe435a0ce50eb2f89d6c280df6f301d2c95cb53",
+  "pair": "USD/EUR",
+  "transformation": "ECB EUR/USD reference → reciprocal USD/EUR; sorted dates; no weekend filling",
+  "license": "CC BY 4.0",
+  "first_date": "1999-01-04",
+  "last_date": "2026-10-07"
+}

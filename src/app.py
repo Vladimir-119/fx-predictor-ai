@@ -7,10 +7,12 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import Response
 
 from src import config, db, logging_config
-from src.api import health, hello, version
+from src.api import health, hello, process, version
+from src.services import prediction
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +28,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         extra={"app": settings.app_name, "version": settings.version},
     )
     try:
+        app.state.forecast_model = None
+        if settings.model_alias:
+            app.state.forecast_model = await run_in_threadpool(prediction.load_model, settings)
+            log.info("model_loaded", extra={"model": app.state.forecast_model.status.model_dump()})
         yield
     finally:
         await db.close_db_pool(app.state.db_pool)
@@ -37,6 +43,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     settings = settings or config.get_settings()
     app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
     app.state.settings = settings
+    app.state.forecast_model = None
 
     @app.middleware("http")
     async def log_requests(
@@ -78,6 +85,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     app.include_router(hello.router)
     app.include_router(health.router)
     app.include_router(version.router)
+    app.include_router(process.router)
     return app
 
 

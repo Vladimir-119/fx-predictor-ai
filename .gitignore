@@ -1,7 +1,15 @@
 # uv.lock, .python-version и .env.example храним в Git.
 
+# Снимки скачиваются по data/manifest.json; результаты доступны в MLflow.
+data/raw/
+reports/
+mlruns/
+mlartifacts/
+
 # Локальное окружение и секреты
 .env
+.env.*
+!.env.example
 .envrc
 .venv
 env/

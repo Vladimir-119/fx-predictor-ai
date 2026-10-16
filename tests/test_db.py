@@ -6,9 +6,12 @@ import pytest
 from asgi_lifespan import LifespanManager
 
 from src import db
+from src.app import create_app
 
 
-async def test_create_pool_is_lazy_and_uses_configured_limits(settings, pool, monkeypatch):
+async def test_pool_is_lazy_and_lifespan_closes_it_on_success_and_failure(
+    settings, pool, monkeypatch
+):
     factory = AsyncMock(return_value=pool)
     monkeypatch.setattr(db.asyncpg, "create_pool", factory)
     result = await db.create_db_pool(settings)
@@ -21,15 +24,13 @@ async def test_create_pool_is_lazy_and_uses_configured_limits(settings, pool, mo
         command_timeout=settings.health_timeout_seconds,
     )
 
-
-async def test_lifespan_closes_pool_on_normal_shutdown(application, pool):
+    application = create_app(settings)
     async with LifespanManager(application):
         assert application.state.db_pool is pool
         pool.close.assert_not_awaited()
     pool.close.assert_awaited_once()
 
-
-async def test_lifespan_closes_pool_after_application_error(application, pool):
+    pool.close.reset_mock()
     with pytest.raises(RuntimeError, match="test failure"):
         async with application.router.lifespan_context(application):
             raise RuntimeError("test failure")

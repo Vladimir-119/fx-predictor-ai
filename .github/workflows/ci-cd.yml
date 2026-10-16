@@ -15,6 +15,8 @@ concurrency:
 
 env:
   UV_VERSION: "0.12.19"
+  MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD: "false"
+  MLFLOW_ENABLE_PROXY_MULTIPART_UPLOAD: "false"
 
 jobs:
   quality:
@@ -34,21 +36,21 @@ jobs:
       - name: Check lockfile and install dependencies
         run: |
           uv lock --check
-          uv sync --frozen --extra web --group dev
+          uv sync --frozen --extra web --extra ml --group dev
       - name: Check all pre-commit hooks
-        run: uv run --frozen --extra web pre-commit run --all-files
+        run: uv run --frozen --extra web --extra ml pre-commit run --all-files
       - name: Ruff lint
-        run: uv run --frozen --extra web ruff check .
+        run: uv run --frozen --extra web --extra ml ruff check .
       - name: Ruff format
-        run: uv run --frozen --extra web ruff format --check .
+        run: uv run --frozen --extra web --extra ml ruff format --check .
       - name: Unit and API tests (coverage >= 95%, including branches)
-        run: uv run --frozen --extra web pytest -q -m "not integration"
+        run: uv run --frozen --extra web --extra ml pytest -q -m "not integration"
       - name: Read package version and validate release tag
         id: version
         env:
           RELEASE_REF: ${{ github.ref }}
         run: |
-          uv run --frozen --extra web python - <<'PY' >> "$GITHUB_OUTPUT"
+          uv run --frozen --extra web --extra ml python - <<'PY' >> "$GITHUB_OUTPUT"
           import os
           import re
           from importlib.metadata import version
@@ -74,11 +76,14 @@ jobs:
           if-no-files-found: warn
 
   integration:
-    name: Docker and real PostgreSQL
+    name: Docker, PostgreSQL, MLflow and S3
     needs: quality
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
+      MODEL_ALIAS: ""
+      RUSTFS_ACCESS_KEY: fx-predictor-ci
+      MLFLOW_TEST_URI: http://127.0.0.1:5001
       POSTGRES_USER: fx_predictor
       POSTGRES_DB: fx_predictor_ai
       API_BASE_URL: http://127.0.0.1:8000
@@ -89,36 +94,47 @@ jobs:
           version: ${{ env.UV_VERSION }}
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen --extra web --group dev
-      - name: Generate temporary database password
+      - run: uv sync --frozen --extra web --extra ml --group dev
+      - name: Generate temporary database and storage passwords
         run: |
           PASSWORD=$(openssl rand -hex 24)
           echo "::add-mask::$PASSWORD"
           echo "POSTGRES_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+          STORAGE_PASSWORD=$(openssl rand -hex 24)
+          echo "::add-mask::$STORAGE_PASSWORD"
+          echo "RUSTFS_SECRET_KEY=$STORAGE_PASSWORD" >> "$GITHUB_ENV"
       - name: Validate Compose and build the stack
         run: |
           docker compose config --quiet
-          docker compose up -d --build --wait --wait-timeout 120
+          docker compose up -d --build --wait --wait-timeout 240
       - name: Verify non-root user and absence of dev dependencies
         run: |
           test "$(docker compose exec -T app id -u)" = "10001"
-          docker compose exec -T app python -c "import importlib.util; assert importlib.util.find_spec('pytest') is None; assert importlib.util.find_spec('ruff') is None"
+          docker compose exec -T app uv run --no-project --no-sync python -c "import importlib.util; assert importlib.util.find_spec('pytest') is None; assert importlib.util.find_spec('ruff') is None"
       - name: Test healthy PostgreSQL
         env:
           EXPECT_POSTGRES: healthy
-        run: uv run --frozen --extra web pytest -q -m integration --no-cov
+        run: uv run --frozen --extra web --extra ml pytest -q -m integration --no-cov
       - name: Test PostgreSQL outage
         env:
           EXPECT_POSTGRES: unavailable
         run: |
           docker compose stop postgres
-          uv run --frozen --extra web pytest -q -m integration --no-cov
+          uv run --frozen --extra web --extra ml pytest -q -m integration --no-cov
       - name: Test recovery without restarting the app
         env:
           EXPECT_POSTGRES: healthy
         run: |
           docker compose up -d --wait --wait-timeout 120 postgres
-          uv run --frozen --extra web pytest -q -m integration --no-cov
+          uv run --frozen --extra web --extra ml pytest -q -m integration --no-cov
+      - name: Test experiments, model registry and proxied S3 artifacts
+        run: uv run --frozen --extra web --extra ml pytest -q tests/test_ml_workflow.py --no-cov
+      - name: Load the registered model on API startup
+        run: MODEL_ALIAS=champion docker compose up -d --no-deps --force-recreate --wait --wait-timeout 120 app
+      - name: Test forecasts with a disposable database
+        env:
+          MLOPS_TEST_DATABASE: "1"
+        run: uv run --frozen --extra web --extra ml pytest -q tests/test_ml_integration.py --no-cov
       - name: Container logs
         if: always()
         run: docker compose logs --no-color

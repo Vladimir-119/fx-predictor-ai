@@ -16,15 +16,100 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-      start_period: 10s
-    cpus: "0.50"
-    mem_limit: 256m
+    cpus: "1.0"
+    mem_limit: 512m
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
-    networks: [fx-predictor-ai-network]
+    restart: unless-stopped
+
+  db-init:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fx_predictor}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-fx_predictor_ai}
+      MLFLOW_DB: ${MLFLOW_DB:-mlflow}
+    volumes:
+      - ./docker/init-db.sh:/init-db.sh:ro
+      - ./sql:/sql:ro
+    entrypoint: ["sh", "/init-db.sh"]
+
+  rustfs:
+    # Закреплённый multi-arch образ: amd64 и arm64 (Mac Apple Silicon).
+    image: rustfs/rustfs@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?Set RUSTFS_ACCESS_KEY in .env}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?Set RUSTFS_SECRET_KEY in .env}
+      RUSTFS_CONSOLE_ENABLE: "true"
+    ports:
+      - "127.0.0.1:${RUSTFS_PORT:-9000}:9000"
+      - "127.0.0.1:${RUSTFS_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - rustfs-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+    cpus: "1.0"
+    mem_limit: 1g
+    restart: unless-stopped
+
+  bucket-init:
+    image: fx-predictor-ai-mlflow:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mlflow
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:?Set RUSTFS_ACCESS_KEY in .env}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:?Set RUSTFS_SECRET_KEY in .env}
+      MLFLOW_BUCKET: ${MLFLOW_BUCKET:-mlflow-artifacts}
+    command: ["uv", "run", "--no-project", "python", "/app/init-bucket.py"]
+
+  mlflow:
+    image: fx-predictor-ai-mlflow:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mlflow
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      bucket-init:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fx_predictor}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      MLFLOW_DB: ${MLFLOW_DB:-mlflow}
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:?Set RUSTFS_ACCESS_KEY in .env}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:?Set RUSTFS_SECRET_KEY in .env}
+      AWS_DEFAULT_REGION: us-east-1
+      MLFLOW_S3_ENDPOINT_URL: http://rustfs:9000
+      MLFLOW_BUCKET: ${MLFLOW_BUCKET:-mlflow-artifacts}
+    ports:
+      - "127.0.0.1:${MLFLOW_PORT:-5001}:5000"
+    healthcheck:
+      test: ["CMD", "uv", "run", "--no-project", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    cpus: "1.0"
+    mem_limit: 1g
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   app:
@@ -38,30 +123,49 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-development}
       HEALTH_TIMEOUT_SECONDS: ${HEALTH_TIMEOUT_SECONDS:-3}
       DB_POOL_MAX_SIZE: ${DB_POOL_MAX_SIZE:-5}
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MODEL_NAME: ${MODEL_NAME:-fx-predictor-ai-forecaster}
+      MODEL_ALIAS: ${MODEL_ALIAS:-}
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
     depends_on:
-      postgres:
+      db-init:
+        condition: service_completed_successfully
+      mlflow:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
-    cpus: "0.50"
-    mem_limit: 256m
+    cpus: "1.0"
+    mem_limit: 768m
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
-    networks: [fx-predictor-ai-network]
+    restart: unless-stopped
+
+  worker:
+    profiles: [worker]
+    image: ${APP_IMAGE:-fx-predictor-ai:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-fx_predictor}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-fx_predictor_ai}
+      UPDATE_INTERVAL_SECONDS: ${UPDATE_INTERVAL_SECONDS:-3600}
+    command: ["uv", "run", "--no-project", "python", "-m", "src.services.rates", "worker"]
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    # Проверка API из Dockerfile к worker неприменима.
+    healthcheck:
+      disable: true
+    cpus: "0.50"
+    mem_limit: 512m
     restart: unless-stopped
 
 volumes:
   postgres-data:
+  rustfs-data:
 
 networks:
-  fx-predictor-ai-network:
-    driver: bridge
+  default:
+    name: fx-predictor-ai-network
