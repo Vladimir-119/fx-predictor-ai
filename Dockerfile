@@ -18,6 +18,7 @@ FROM python:3.12-slim AS runtime
 COPY --from=builder /usr/local/bin/uv /usr/local/bin/uv
 WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH" \
+    VIRTUAL_ENV="/app/.venv" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 LABEL org.opencontainers.image.title="fx-predictor-ai"
@@ -30,7 +31,7 @@ USER appuser
 # Порт API и проверка доступности приложения.
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=10s \
-    CMD uv run python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"
+    CMD uv run --no-project python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"
 
 # Запускаем API через uv.
-CMD ["uv", "run", "uvicorn", "src.app:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+CMD ["uv", "run", "--no-project", "uvicorn", "src.app:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

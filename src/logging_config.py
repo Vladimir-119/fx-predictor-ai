@@ -28,6 +28,8 @@ class JsonFormatter(logging.Formatter):
             "error_type",
             "app",
             "version",
+            "model",
+            "observations",
         ):
             if hasattr(record, field):
                 data[field] = getattr(record, field)
@@ -43,7 +45,10 @@ def setup_logging(level: str) -> None:
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(level.upper())
-    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    for name in ("uvicorn", "uvicorn.error"):
         uvicorn_logger = logging.getLogger(name)
         uvicorn_logger.handlers = [handler]
         uvicorn_logger.propagate = False
+    access_logger = logging.getLogger("uvicorn.access")
+    access_logger.handlers = []
+    access_logger.propagate = False

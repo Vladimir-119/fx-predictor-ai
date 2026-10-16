@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from src.config import Settings, get_settings
 
 
-def test_settings_read_environment_without_exposing_database_password(monkeypatch):
+def test_settings_read_environment_validate_values_and_hide_password(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:private@localhost:5433/db")
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
     monkeypatch.setenv("HEALTH_TIMEOUT_SECONDS", "2.5")
@@ -18,7 +18,5 @@ def test_settings_read_environment_without_exposing_database_password(monkeypatc
     assert "private" not in repr(settings)
     assert "private" not in settings.model_dump_json()
 
-
-def test_invalid_settings_are_rejected():
     with pytest.raises(ValidationError):
         Settings(_env_file=None, health_timeout_seconds=0)

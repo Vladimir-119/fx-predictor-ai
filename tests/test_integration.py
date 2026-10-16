@@ -21,7 +21,7 @@ async def live_client():
         yield client
 
 
-async def test_live_liveness_and_version(live_client):
+async def test_live_api_contract_and_database_state(live_client):
     liveness = await live_client.get("/healthz")
     assert liveness.status_code == 200
     assert liveness.json() == {"status": "ok"}
@@ -30,8 +30,6 @@ async def test_live_liveness_and_version(live_client):
     assert response.json() == {"app": "fx-predictor-ai", "version": version("fx-predictor-ai")}
     assert len(response.headers["X-Request-ID"]) == 32
 
-
-async def test_live_postgres_status_version_and_timing(live_client):
     expected = os.getenv("EXPECT_POSTGRES", "healthy")
     assert expected in {"healthy", "unavailable"}
     response = await live_client.get("/api/v1/health")

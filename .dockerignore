@@ -1,6 +1,11 @@
 # Git и настройки GitHub
 .git
 .github
+data/
+reports/
+notebooks/
+mlruns/
+mlartifacts/
 
 # Локальное окружение и секреты
 .venv

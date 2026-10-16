@@ -9,7 +9,9 @@ from src.schemas import HealthStatus
 from src.services import health as health_service
 
 
-async def test_postgres_errors_return_stable_unavailable_contract(pool, settings):
+async def test_database_health_bounds_waiting_handles_errors_and_preserves_cancellation(
+    pool, settings
+):
     pool.fetchval.side_effect = PostgresError("private")
     dependency = await health_service.check_postgres(pool, settings)
     assert dependency.status is HealthStatus.unavailable
@@ -18,16 +20,13 @@ async def test_postgres_errors_return_stable_unavailable_contract(pool, settings
     assert dependency.detail == "PostgreSQL is unavailable or the check timed out"
     assert "private" not in dependency.model_dump_json()
 
-
-async def test_postgres_invalid_version_marks_dependency_unavailable(pool, settings):
+    pool.fetchval.side_effect = None
     pool.fetchval.return_value = None
     dependency = await health_service.check_postgres(pool, settings)
     assert dependency.status is HealthStatus.unavailable
     assert dependency.version is None
     assert dependency.detail == "PostgreSQL returned an invalid version"
 
-
-async def test_database_check_has_bounded_timeout(pool, settings):
     cancelled = asyncio.Event()
 
     async def stalled_query(query):
@@ -43,19 +42,16 @@ async def test_database_check_has_bounded_timeout(pool, settings):
     assert dependency.response_time_ms >= 10
     assert cancelled.is_set()
 
-
-async def test_response_time_includes_awaiting_database(pool, settings):
     async def delayed_query(query):
         await asyncio.sleep(0.02)
         return "16.10"
 
+    settings.health_timeout_seconds = 0.2
     pool.fetchval.side_effect = delayed_query
     dependency = await health_service.check_postgres(pool, settings)
     assert dependency.status is HealthStatus.healthy
     assert dependency.response_time_ms >= 10
 
-
-async def test_cancellation_propagates_instead_of_becoming_unavailable(pool, settings):
     pool.fetchval.side_effect = asyncio.CancelledError()
     with pytest.raises(asyncio.CancelledError):
         await health_service.check_postgres(pool, settings)
