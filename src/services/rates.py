@@ -120,7 +120,7 @@ async def import_snapshot(pool: asyncpg.Pool) -> int:
     return await save_rates(pool, observations)
 
 
-async def load_history(pool: asyncpg.Pool, as_of: date) -> pd.DataFrame:
+async def load_history(pool: asyncpg.Pool | asyncpg.Connection, as_of: date) -> pd.DataFrame:
     """Получить только известные на указанную дату значения USD/EUR."""
     rows = await pool.fetch(
         """SELECT rate_date, value FROM exchange_rates

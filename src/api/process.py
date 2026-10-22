@@ -11,7 +11,7 @@ from src.services import prediction, rates
 router = APIRouter(tags=["Forecasts"])
 
 
-@router.post("/process", response_model=ForecastResponse)
+@router.post("/process", response_model=ForecastResponse, deprecated=True)
 async def process(body: ForecastRequest, request: Request) -> ForecastResponse:
     """Предсказать следующий опубликованный курс USD/EUR."""
     model = request.app.state.forecast_model
