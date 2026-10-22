@@ -1,8 +1,10 @@
 """MLflow + S3 + PostgreSQL + API в одноразовом стеке CI."""
 
+import asyncio
 import os
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
+from uuid import uuid4
 
 import asyncpg
 import numpy as np
@@ -59,6 +61,16 @@ async def test_live_forecast_uses_registered_version_and_rate_import_is_idempote
             assert body["as_of"] == latest.isoformat()
             assert body["predicted_rate"] > 0
             assert (await http.get("/api/v1/rates")).json()["stale"] is False
+            submitted = await http.post("/api/v1/tasks", json={"task_id": str(uuid4())})
+            assert submitted.status_code == 202
+            task_id = submitted.json()["task_id"]
+            for _ in range(100):
+                task_state = (await http.get(f"/api/v1/tasks/{task_id}")).json()
+                if task_state["status"] in {"COMPLETED", "FAILED"}:
+                    break
+                await asyncio.sleep(0.1)
+            assert task_state["status"] == "COMPLETED"
+            assert task_state["result"]["model"]["version"] == selected.version
         saved = await pool.fetchrow(
             "SELECT model_version, predicted_rate FROM predictions ORDER BY id DESC LIMIT 1"
         )

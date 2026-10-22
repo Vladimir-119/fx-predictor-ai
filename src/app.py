@@ -10,8 +10,8 @@ from fastapi import FastAPI, Request
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import Response
 
-from src import config, db, logging_config
-from src.api import health, hello, process, version
+from src import config, db, logging_config, messaging
+from src.api import health, hello, process, tasks, version
 from src.services import prediction
 
 log = logging.getLogger(__name__)
@@ -28,12 +28,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         extra={"app": settings.app_name, "version": settings.version},
     )
     try:
+        app.state.task_broker = None
+        if settings.tasks_enabled:
+            broker = messaging.create_broker(settings)
+            try:
+                await messaging.connect_broker(broker, settings)
+            except (OSError, TimeoutError, ConnectionError):
+                await broker.stop()
+                log.warning("task_broker_unavailable")
+            else:
+                app.state.task_broker = broker
         app.state.forecast_model = None
         if settings.model_alias:
             app.state.forecast_model = await run_in_threadpool(prediction.load_model, settings)
             log.info("model_loaded", extra={"model": app.state.forecast_model.status.model_dump()})
         yield
     finally:
+        if app.state.task_broker is not None:
+            await app.state.task_broker.stop()
         await db.close_db_pool(app.state.db_pool)
         log.info("application_stopped")
 
@@ -44,6 +56,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
     app.state.settings = settings
     app.state.forecast_model = None
+    app.state.task_broker = None
 
     @app.middleware("http")
     async def log_requests(
@@ -86,6 +99,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(version.router)
     app.include_router(process.router)
+    app.include_router(tasks.router)
     return app
 
 
