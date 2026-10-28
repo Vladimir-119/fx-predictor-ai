@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
 
 from src.config import Settings
-from src.ml.features import FEATURE_COLUMNS, MIN_HISTORY, latest_features
+from src.ml.features import FEATURE_COLUMNS, FEATURE_SET, MIN_HISTORY, latest_features
 from src.schemas import ForecastRequest, ForecastResponse, ModelStatus
 from src.services.rates import expected_latest_date, load_history, next_publication_date
 
@@ -42,7 +42,10 @@ def load_model(settings: Settings) -> LoadedModel:
     metadata = predictor.metadata.metadata or {}
     if metadata.get("pair") != "USD/EUR" or metadata.get("target") != "next_rate_change":
         raise ValueError("Registered model has an incompatible pair or target")
-    if metadata.get("features") != FEATURE_COLUMNS:
+    if (
+        metadata.get("features") != FEATURE_COLUMNS
+        or metadata.get("feature_set", FEATURE_SET) != FEATURE_SET
+    ):
         raise ValueError("Registered model has an incompatible feature contract")
     return LoadedModel(
         predictor=predictor,

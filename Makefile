@@ -1,4 +1,5 @@
 UV = uv run --extra web --extra ml
+EXPERIMENT_CONFIG ?= configs/experiments.toml
 
 # RustFS доступен клиентам через MLflow, без прямых S3-ссылок.
 export MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD = false
@@ -39,7 +40,23 @@ eda:
 	$(UV) jupyter nbconvert --execute --to notebook --output eda.executed.ipynb --output-dir reports notebooks/eda.ipynb
 
 train:
-	$(UV) python -m src.ml.train
+	$(UV) python -m src.ml.train --config "$(EXPERIMENT_CONFIG)"
+
+.PHONY: training-data train-snapshot promote backfill-rates restart-model
+training-data:
+	$(UV) python -m src.ml.dataset
+
+train-snapshot:
+	$(UV) python -m src.ml.train --config "$(EXPERIMENT_CONFIG)" --snapshot "$(SNAPSHOT)"
+
+promote:
+	$(UV) python -m src.ml.train --promote "$(VERSION)"
+
+backfill-rates:
+	$(UV) python -m src.services.rates backfill
+
+restart-model:
+	docker compose --profile tasks restart app inference-worker
 
 import-rates:
 	$(UV) python -m src.services.rates import

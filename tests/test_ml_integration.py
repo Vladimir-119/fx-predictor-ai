@@ -53,11 +53,11 @@ async def test_live_forecast_uses_registered_version_and_rate_import_is_idempote
         async with AsyncClient(base_url=os.environ["API_BASE_URL"], trust_env=False) as http:
             status = await http.get("/api/v1/model")
             assert status.status_code == 200
-            assert status.json()["version"] == selected.version
+            assert status.json()["version"] == str(selected.version)
             response = await http.post("/process", json={})
             assert response.status_code == 200
             body = response.json()
-            assert body["model"]["version"] == selected.version
+            assert body["model"]["version"] == str(selected.version)
             assert body["as_of"] == latest.isoformat()
             assert body["predicted_rate"] > 0
             assert (await http.get("/api/v1/rates")).json()["stale"] is False
@@ -70,11 +70,11 @@ async def test_live_forecast_uses_registered_version_and_rate_import_is_idempote
                     break
                 await asyncio.sleep(0.1)
             assert task_state["status"] == "COMPLETED"
-            assert task_state["result"]["model"]["version"] == selected.version
+            assert task_state["result"]["model"]["version"] == str(selected.version)
         saved = await pool.fetchrow(
             "SELECT model_version, predicted_rate FROM predictions ORDER BY id DESC LIMIT 1"
         )
-        assert saved["model_version"] == selected.version
+        assert saved["model_version"] == str(selected.version)
         assert saved["predicted_rate"] == body["predicted_rate"]
     finally:
         await pool.close()

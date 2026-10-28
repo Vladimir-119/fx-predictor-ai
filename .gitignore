@@ -2,6 +2,7 @@
 
 # Снимки скачиваются по data/manifest.json; результаты доступны в MLflow.
 data/raw/
+data/snapshots/
 reports/
 mlruns/
 mlartifacts/

@@ -1,0 +1,35 @@
+feature_set = "rates-v1"
+validation_size = 126
+holdout_size = 63
+cv_splits = 3
+min_training_size = 252
+
+[[candidates]]
+name = "naive"
+model = "baseline"
+
+[[candidates]]
+name = "ridge"
+model = "ridge"
+params = { alpha = 10.0 }
+
+[[candidates]]
+name = "catboost"
+model = "catboost"
+params = { loss_function = "MAE" }
+
+[[candidates]]
+name = "catboost-regularized"
+model = "catboost"
+params = { loss_function = "MAE", depth = 3, l2_leaf_reg = 10 }
+
+[[candidates]]
+name = "catboost-recent"
+model = "catboost"
+train_years = 5
+params = { loss_function = "MAE" }
+
+[[candidates]]
+name = "catboost-rmse"
+model = "catboost"
+params = { loss_function = "RMSE" }
