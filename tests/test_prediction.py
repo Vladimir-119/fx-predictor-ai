@@ -67,6 +67,9 @@ async def test_forecast_uses_available_history_and_rejects_stale_or_wrong_horizo
     assert result.predicted_rate == pytest.approx(1 / 1.2 + 0.001)
     assert pool.fetch.call_args.args[1] == now.date()
     assert pool.execute.call_args.args[-1] == "4"
+    pool.execute.reset_mock()
+    await prediction.forecast(ForecastRequest(), model, pool, now, save=False)
+    pool.execute.assert_not_awaited()
     with pytest.raises(prediction.InvalidForecastDateError, match="next ECB"):
         await prediction.forecast(
             ForecastRequest(forecast_date=date(2026, 10, 9)), model, pool, now

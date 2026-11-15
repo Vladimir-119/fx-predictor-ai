@@ -20,3 +20,16 @@ CREATE TABLE IF NOT EXISTS predictions (
     model_version TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS tasks (
+    task_id UUID PRIMARY KEY,
+    payload_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'QUEUED'
+        CHECK (status IN ('QUEUED', 'RUNNING', 'COMPLETED', 'FAILED')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    result JSONB,
+    error TEXT,
+    submitted_at TIMESTAMPTZ NOT NULL,
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ
+);

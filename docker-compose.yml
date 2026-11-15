@@ -1,6 +1,26 @@
 name: fx-predictor-ai
 
 services:
+  rabbitmq:
+    image: rabbitmq:4.1-management
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-fx_predictor}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "+S 2:2"
+    ports:
+      - "127.0.0.1:${RABBITMQ_PORT:-5672}:5672"
+      - "127.0.0.1:${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    cpus: "1.0"
+    mem_limit: 512m
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -126,9 +146,15 @@ services:
       MLFLOW_TRACKING_URI: http://mlflow:5000
       MODEL_NAME: ${MODEL_NAME:-fx-predictor-ai-forecaster}
       MODEL_ALIAS: ${MODEL_ALIAS:-}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-fx_predictor}:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/
+      TASKS_QUEUE: ${TASKS_QUEUE:-fx-predictor-ai.tasks}
+      QUEUE_LIMIT: ${QUEUE_LIMIT:-20}
+      INFERENCE_DELAY_SECONDS: ${INFERENCE_DELAY_SECONDS:-1}
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
     depends_on:
+      rabbitmq:
+        condition: service_healthy
       db-init:
         condition: service_completed_successfully
       mlflow:
@@ -140,6 +166,43 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    restart: unless-stopped
+
+  inference-worker:
+    profiles: [tasks]
+    image: ${APP_IMAGE:-fx-predictor-ai:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["uv", "run", "--no-project", "uvicorn", "src.inference_worker:app", "--host", "0.0.0.0", "--port", "8001", "--no-access-log", "--timeout-graceful-shutdown", "65"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-fx_predictor}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-fx_predictor_ai}
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MODEL_NAME: ${MODEL_NAME:-fx-predictor-ai-forecaster}
+      MODEL_ALIAS: ${MODEL_ALIAS:-champion}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-fx_predictor}:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/
+      TASKS_QUEUE: ${TASKS_QUEUE:-fx-predictor-ai.tasks}
+      QUEUE_LIMIT: ${QUEUE_LIMIT:-20}
+      PREFETCH_COUNT: ${PREFETCH_COUNT:-1}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      INFERENCE_DELAY_SECONDS: ${INFERENCE_DELAY_SECONDS:-1}
+      TASK_MAX_ATTEMPTS: ${TASK_MAX_ATTEMPTS:-3}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+      mlflow:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "uv", "run", "--no-project", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    stop_grace_period: 75s
+    cpus: "1.0"
+    mem_limit: 768m
     restart: unless-stopped
 
   worker:
@@ -163,6 +226,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  rabbitmq-data:
   postgres-data:
   rustfs-data:
 

@@ -22,6 +22,7 @@ def settings():
         health_timeout_seconds=0.2,
         db_pool_max_size=5,
         model_alias="",
+        tasks_enabled=False,
     )
 
 

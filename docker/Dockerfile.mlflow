@@ -3,7 +3,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.12.19 /uv /usr/local/bin/uv
 WORKDIR /app
 ENV UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never \
     VIRTUAL_ENV=/app/.venv PATH="/app/.venv/bin:$PATH" \
-    PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+    PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 MLFLOW_DISABLE_TELEMETRY=true
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --extra tracking --no-install-project
 COPY docker/init-bucket.py docker/start-mlflow.py ./

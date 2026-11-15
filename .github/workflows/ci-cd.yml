@@ -17,6 +17,7 @@ env:
   UV_VERSION: "0.12.19"
   MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD: "false"
   MLFLOW_ENABLE_PROXY_MULTIPART_UPLOAD: "false"
+  MLFLOW_DISABLE_TELEMETRY: "true"
 
 jobs:
   quality:
@@ -95,11 +96,16 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync --frozen --extra web --extra ml --group dev
+      - name: Test real RabbitMQ and PostgreSQL with Testcontainers
+        env:
+          RUN_BROKER_TESTS: "1"
+        run: uv run --frozen --extra web --extra ml pytest -q tests/test_broker_integration.py --no-cov
       - name: Generate temporary database and storage passwords
         run: |
           PASSWORD=$(openssl rand -hex 24)
           echo "::add-mask::$PASSWORD"
           echo "POSTGRES_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+          echo "RABBITMQ_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
           STORAGE_PASSWORD=$(openssl rand -hex 24)
           echo "::add-mask::$STORAGE_PASSWORD"
           echo "RUSTFS_SECRET_KEY=$STORAGE_PASSWORD" >> "$GITHUB_ENV"
@@ -130,17 +136,17 @@ jobs:
       - name: Test experiments, model registry and proxied S3 artifacts
         run: uv run --frozen --extra web --extra ml pytest -q tests/test_ml_workflow.py --no-cov
       - name: Load the registered model on API startup
-        run: MODEL_ALIAS=champion docker compose up -d --no-deps --force-recreate --wait --wait-timeout 120 app
+        run: MODEL_ALIAS=champion docker compose --profile tasks up -d --no-deps --force-recreate --wait --wait-timeout 120 app inference-worker
       - name: Test forecasts with a disposable database
         env:
           MLOPS_TEST_DATABASE: "1"
         run: uv run --frozen --extra web --extra ml pytest -q tests/test_ml_integration.py --no-cov
       - name: Container logs
         if: always()
-        run: docker compose logs --no-color
+        run: docker compose --profile tasks logs --no-color
       - name: Clean up
         if: always()
-        run: docker compose down -v
+        run: docker compose --profile tasks down -v
 
   publish:
     name: Publish versioned image to GHCR

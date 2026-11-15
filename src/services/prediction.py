@@ -70,8 +70,10 @@ def predict_rate(model: LoadedModel, history: pd.DataFrame) -> float:
 async def forecast(
     request: ForecastRequest,
     model: LoadedModel,
-    pool: asyncpg.Pool,
+    pool: asyncpg.Pool | asyncpg.Connection,
     now: datetime,
+    *,
+    save: bool = True,
 ) -> ForecastResponse:
     """Построить прогноз из актуальной истории и сохранить его происхождение."""
     history = await load_history(pool, now.date())
@@ -93,6 +95,8 @@ async def forecast(
         predicted_rate=predicted,
         model=model.status,
     )
+    if not save:
+        return response
     await pool.execute(
         """INSERT INTO predictions
         (source, pair, as_of, forecast_date, predicted_rate, model_name, model_version)
