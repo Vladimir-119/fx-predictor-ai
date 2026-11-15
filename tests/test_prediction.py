@@ -51,7 +51,11 @@ def test_loader_resolves_alias_before_loading_exact_version_and_checks_contract(
     model = prediction.load_model(settings)
     loader.assert_called_once_with("models:/fx-predictor-ai-forecaster/4")
     assert model.status.version == "4" and model.status.run_id == "run-4"
-    for invalid in ({}, {**metadata, "features": ["unknown"]}):
+    for invalid in (
+        {},
+        {**metadata, "features": ["unknown"]},
+        {**metadata, "feature_set": "news-v2"},
+    ):
         predictor.metadata.metadata = invalid
         with pytest.raises(ValueError, match="incompatible"):
             prediction.load_model(settings)

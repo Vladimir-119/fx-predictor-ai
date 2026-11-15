@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     model_name: str = "fx-predictor-ai-forecaster"
     model_alias: str = ""
     ecb_history_url: str = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist-90d.xml"
+    ecb_full_history_url: str = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist.xml"
     update_interval_seconds: int = Field(default=3600, ge=60)
     rabbitmq_url: SecretStr = SecretStr("amqp://fx_predictor:change-me@localhost:5672/")
     tasks_enabled: bool = True

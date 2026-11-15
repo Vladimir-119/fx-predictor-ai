@@ -179,9 +179,11 @@ async def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["import", "update", "worker"])
+    parser.add_argument("command", choices=["import", "update", "backfill", "worker"])
     command = parser.parse_args().command
     settings = get_settings()
+    if command == "backfill":
+        settings = settings.model_copy(update={"ecb_history_url": settings.ecb_full_history_url})
     logging_config.setup_logging(settings.log_level)
     pool = await db.create_db_pool(settings)
     try:

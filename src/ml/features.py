@@ -2,6 +2,7 @@
 
 import pandas as pd
 
+FEATURE_SET = "rates-v1"
 FEATURE_COLUMNS = [
     "rate",
     "lag_1",

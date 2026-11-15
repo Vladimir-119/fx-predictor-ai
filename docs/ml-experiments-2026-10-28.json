@@ -1,0 +1,18 @@
+{
+  "last_date": "2026-10-28",
+  "observations": 7124,
+  "dataset_sha256": "fd605e999fd85499659988d14c9b7b23d6ed92a2ed04c461c1271951922d2799",
+  "feature_set": "rates-v1",
+  "validation_size": 126,
+  "holdout_size": 63,
+  "winner": "catboost-regularized",
+  "test_metrics": {
+    "test_mae": 0.0019344323322812397,
+    "test_rmse": 0.0024770634436965828,
+    "test_naive_mae": 0.001974065277262174,
+    "test_direction_accuracy": 0.6190476190476191,
+    "test_skill_vs_naive": 0.020076815816294058
+  },
+  "execution": "Local MLflow SQLite. Kaggle v131 plus direct official ECB download. PostgreSQL was not used in this control run.",
+  "replay_mae_matches_atol": 1e-12
+}
