@@ -5,7 +5,9 @@ import os
 import boto3
 from botocore.exceptions import ClientError
 
-client = boto3.client("s3", endpoint_url="http://rustfs:9000", region_name="us-east-1")
+client = boto3.client(
+    "s3", endpoint_url=os.environ["MLFLOW_S3_ENDPOINT_URL"], region_name="us-east-1"
+)
 bucket = os.environ["MLFLOW_BUCKET"]
 try:
     client.head_bucket(Bucket=bucket)
