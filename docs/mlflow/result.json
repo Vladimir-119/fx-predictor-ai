@@ -1,0 +1,13 @@
+{
+  "winner": "catboost-regularized",
+  "candidate_version": "11",
+  "batch_run_id": "3a660772ef7a4a949b7e79ba9742846c",
+  "evaluation_run_id": "1acb17aaf59444238455a9b8dcd82c62",
+  "snapshot_path": "data\\snapshots\\8456b02ec999a6728598143193a1a03130066a5b180ea38a0b5c87ace1542a4d\\rates.csv",
+  "dataset_version": "8456b02ec999a6728598143193a1a03130066a5b180ea38a0b5c87ace1542a4d",
+  "test_mae": 0.0019344323322812397,
+  "test_rmse": 0.0024770634436965828,
+  "test_naive_mae": 0.001974065277262174,
+  "test_direction_accuracy": 0.6190476190476191,
+  "test_skill_vs_naive": 0.020076815816294058
+}
