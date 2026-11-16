@@ -3,7 +3,7 @@
 import asyncio
 import os
 from datetime import UTC, datetime, timedelta
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
 import asyncpg
@@ -22,6 +22,32 @@ pytestmark = [
         reason="Requires a disposable database: MLOPS_TEST_DATABASE=1",
     ),
 ]
+
+
+async def test_mlflow_download_link_serves_the_original_artifact(tmp_path):
+    """Проверить реальную подписанную ссылку, которую использует кнопка Download."""
+    tracking_uri = os.environ["MLFLOW_TEST_URI"]
+    client = MlflowClient(tracking_uri=tracking_uri)
+    experiment = client.create_experiment(f"test-download-{uuid4().hex}")
+    run = client.create_run(experiment)
+    artifact = tmp_path / "download-check.txt"
+    artifact.write_text("fx-predictor-ai: проверка скачивания\n", encoding="utf-8")
+    client.log_artifact(run.info.run_id, str(artifact))
+    artifact_path = urlsplit(run.info.artifact_uri).path.strip("/")
+    async with AsyncClient(base_url=tracking_uri, trust_env=False) as http:
+        response = await http.get(
+            f"/ajax-api/2.0/mlflow-artifacts/presigned/{artifact_path}/{artifact.name}"
+        )
+        assert response.status_code == 200
+        signed = urlsplit(response.json()["url"])
+        assert signed.hostname == "rustfs.localhost"
+        assert signed.port == int(os.getenv("RUSTFS_PORT", "9000"))
+        # Браузер направляет *.localhost на loopback. Сохраняем подписанный Host.
+        local_url = signed._replace(netloc=f"127.0.0.1:{signed.port}").geturl()
+        downloaded = await http.get(local_url, headers={"Host": signed.netloc})
+        assert downloaded.status_code == 200
+        assert downloaded.content == artifact.read_bytes()
+    client.set_terminated(run.info.run_id)
 
 
 async def test_live_forecast_uses_registered_version_and_rate_import_is_idempotent():

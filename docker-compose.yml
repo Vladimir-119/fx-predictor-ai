@@ -67,17 +67,22 @@ services:
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?Set RUSTFS_ACCESS_KEY in .env}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?Set RUSTFS_SECRET_KEY in .env}
       RUSTFS_CONSOLE_ENABLE: "true"
+      # Один S3-порт внутри Docker и на компьютере для подписанных ссылок.
+      RUSTFS_ADDRESS: ":${RUSTFS_PORT:-9000}"
     ports:
-      - "127.0.0.1:${RUSTFS_PORT:-9000}:9000"
+      - "127.0.0.1:${RUSTFS_PORT:-9000}:${RUSTFS_PORT:-9000}"
       - "127.0.0.1:${RUSTFS_CONSOLE_PORT:-9001}:9001"
     volumes:
       - rustfs-data:/data
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:${RUSTFS_PORT:-9000}/health"]
       interval: 5s
       timeout: 3s
       retries: 30
       start_period: 20s
+    networks:
+      default:
+        aliases: [rustfs.localhost]
     cpus: "1.0"
     mem_limit: 1g
     restart: unless-stopped
@@ -94,6 +99,7 @@ services:
       AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:?Set RUSTFS_ACCESS_KEY in .env}
       AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:?Set RUSTFS_SECRET_KEY in .env}
       MLFLOW_BUCKET: ${MLFLOW_BUCKET:-mlflow-artifacts}
+      MLFLOW_S3_ENDPOINT_URL: http://rustfs.localhost:${RUSTFS_PORT:-9000}
     command: ["uv", "run", "--no-project", "python", "/app/init-bucket.py"]
 
   mlflow:
@@ -113,7 +119,8 @@ services:
       AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:?Set RUSTFS_ACCESS_KEY in .env}
       AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:?Set RUSTFS_SECRET_KEY in .env}
       AWS_DEFAULT_REGION: us-east-1
-      MLFLOW_S3_ENDPOINT_URL: http://rustfs:9000
+      MLFLOW_S3_ENDPOINT_URL: http://rustfs.localhost:${RUSTFS_PORT:-9000}
+      MLFLOW_BOTO_CLIENT_ADDRESSING_STYLE: path
       MLFLOW_BUCKET: ${MLFLOW_BUCKET:-mlflow-artifacts}
     ports:
       - "127.0.0.1:${MLFLOW_PORT:-5001}:5000"

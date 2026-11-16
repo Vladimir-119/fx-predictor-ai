@@ -1,6 +1,6 @@
 [project]
 name = "fx-predictor-ai"
-version = "0.4.0"
+version = "0.4.1"
 description = "Daily exchange-rate forecasting with FastAPI and MLflow"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
