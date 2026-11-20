@@ -9,7 +9,7 @@
 другие пары и признаки из новостей - следующие этапы.
 
 **Стек:** Python 3.12 · FastAPI · CatBoost · MLflow · PostgreSQL · RustFS ·
-RabbitMQ · FastStream · Docker Compose · uv · Ruff · pytest · GitHub Actions.
+RabbitMQ · FastStream · OpenTelemetry · Grafana · Docker Compose · uv · Ruff · pytest · GitHub Actions.
 
 Авторы: **Volkov Vladimir** - [@The_Valdemare](https://t.me/The_Valdemare),
 **Vagin Arseniy** - [@quitepeaky](https://t.me/quitepeaky).
@@ -22,6 +22,7 @@ RabbitMQ · FastStream · Docker Compose · uv · Ruff · pytest · GitHub Actio
 - Обновление курсов отдельным процессом.
 - Эксперименты, версии данных и моделей в MLflow; явный выбор рабочей модели.
 - Ограничение накопления задач, повторы и сохранение результатов в PostgreSQL.
+- Поиск истории задачи по логам и трейсам, живой дашборд очереди и алерты.
 
 ## Результаты
 
@@ -37,11 +38,11 @@ RabbitMQ · FastStream · Docker Compose · uv · Ruff · pytest · GitHub Actio
 [Запуск](#запуск) · [API](#api) · [Данные](#данные-и-прогноз) ·
 [Модели и метрики](#модели-и-качество) · [Архитектура](#архитектура) ·
 [Нагрузочные результаты](#очередь-и-нагрузка) · [Разработка](#разработка-и-проверки) ·
-[Безопасность](#безопасность)
+[Наблюдаемость](#наблюдаемость) · [Безопасность](#безопасность)
 
 ## Запуск
 
-Нужны Python 3.12, [uv](https://docs.astral.sh/uv/), Git, Make и Docker с Compose v2.
+Нужны Python 3.12, [uv](https://docs.astral.sh/uv/), Git, Make и Docker с Compose **2.20+**.
 Команды выполняются из корня проекта. На Windows подойдёт PowerShell с Make
 или WSL2; Docker Desktop должен быть запущен.
 
@@ -60,7 +61,8 @@ cp .env.example .env
 
 - `POSTGRES_PASSWORD` и тот же пароль в `DATABASE_URL`;
 - `RABBITMQ_PASSWORD` и тот же пароль в `RABBITMQ_URL`;
-- `RUSTFS_SECRET_KEY`.
+- `RUSTFS_SECRET_KEY`;
+- `GRAFANA_PASSWORD`, если будешь включать наблюдаемость.
 
 Для первого запуска проще использовать латинские буквы и цифры.
 Специальные символы в URL требуют кодирования. `.env` исключён из Git.
@@ -542,8 +544,8 @@ make integration
 `make broker-test` - два теста с реальными RabbitMQ/PostgreSQL через Testcontainers.
 `make integration` проверяет работающий API и PostgreSQL.
 
-В проверочном запуске 0.4.0 прошли **39 тестов, покрытие - 99,05%**;
-отдельно прошли два broker-теста. Порог покрытия  95%.
+В проверочном запуске 0.5.0 прошли **56 тестов, покрытие — 98,31%**.
+Порог покрытия — 95%. Настоящие broker-тесты и проверка полного стека выполняются отдельно.
 Отчёты находятся в `htmlcov/index.html` и `coverage.xml`.
 Тесты обработчиков используют `TestRabbitBroker`; дополнительные CI-сценарии проверяют
 прогнозы с настоящими MLflow, RustFS и одноразовой БД.
@@ -589,6 +591,54 @@ ID, время публикации и отказы пакетного исто�
 состояния и результаты - в таблице `tasks` PostgreSQL.
 
 </details>
+
+## Наблюдаемость
+
+Логи, трейсы и метрики помогают увидеть путь одной задачи и состояние всего конвейера.
+Код приложения отправляет логи в stdout, а трейсы и метрики — по OTLP в Collector.
+Хранилища включаются отдельно: **Loki + Alloy**, **Tempo**, **Prometheus** и **Grafana**.
+Обычный `make up` работает без этого стека и без экспорта телеметрии.
+
+Для уже настроенного проекта с `champion`:
+
+```bash
+make install
+make obs-up
+make obs-demo
+make obs-test
+```
+
+Открой [Grafana](http://localhost:3000) и дашборд **Конвейер**.
+Пользователь и пароль — `GRAFANA_USER` / `GRAFANA_PASSWORD` из `.env`.
+Дашборд, источники данных и два алерта загружаются из репозитория, вручную их создавать не нужно.
+В ответе API есть `X-Trace-ID`; в Loki можно искать `task_id` и одним кликом открыть трейс.
+
+Для нагрузки и проверки ошибок:
+
+```bash
+make obs-source COUNT=300
+make obs-demo MODE=poison
+make obs-demo MODE=overload COUNT=300
+make obs-two
+make obs-stats
+```
+
+`obs-source` запускает источник в контейнере: агент видит его stdout, а последний пакет
+метрик отправляется до завершения процесса. `obs-two` добавляет второй inference-воркер.
+Чтобы вернуться к одному, выполни `make obs-one`.
+
+На пустом стенде сначала выполни `make dataset`. Если alias отсутствует, одноразовый
+`model-init` обучит на проверенном снимке настоящий persistence baseline: следующий курс
+равен последнему. Это стартовая модель стенда, а не результат сравнения качества.
+**Существующий champion сохраняется.** Рабочую модель по-прежнему выбираем через
+эксперименты и `make promote`.
+
+Лимиты шести сервисов наблюдаемости в сумме — **1472 MiB**; это бюджет, а не измеренный
+расход памяти. Retention хранилищ — 48 часов. Фактический расход проверяем `make obs-stats`
+во время нагрузки. Приложение, MLflow, RustFS и брокер в этот бюджет не входят.
+
+[Настройка, диагностика и описание телеметрии](docs/observability.md).
+`make obs-down` останавливает только наблюдаемость; `make down` — весь проект без удаления данных.
 
 ## Безопасность
 

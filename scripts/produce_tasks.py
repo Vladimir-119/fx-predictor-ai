@@ -4,16 +4,20 @@ import argparse
 import asyncio
 import csv
 import json
+import logging
 import time
 from pathlib import Path
 from uuid import UUID, uuid4, uuid5
 
 import psutil
 
+from src import logging_config, telemetry
 from src.config import get_settings
 from src.messaging import connect_broker, create_broker, publish_with_backpressure
 from src.ml.data import load_rates
 from src.task_schemas import TaskMessage, TaskRequest
+
+log = logging.getLogger(__name__)
 
 
 def prepare(path: Path, count: int) -> None:
@@ -35,14 +39,18 @@ async def produce(path: Path, output: Path, count: int, job_id: UUID | None = No
     if path.resolve() in {output.resolve(), output.with_suffix(".job-id").resolve()}:
         raise ValueError("Producer output must not overwrite the input file")
     settings = get_settings()
+    logging_config.setup_logging(settings.log_level)
+    runtime = telemetry.setup_telemetry(settings)
     broker = create_broker(settings)
-    await connect_broker(broker, settings)
     output.parent.mkdir(parents=True, exist_ok=True)
     job_id = job_id or uuid4()
     output.with_suffix(".job-id").write_text(str(job_id) + "\n", encoding="utf-8")
     process = psutil.Process()
     started = time.perf_counter()
+    published = 0
     try:
+        await connect_broker(broker, settings)
+        log.info("source_started", extra={"job_id": str(job_id), "published": 0})
         with (
             path.open(encoding="utf-8") as source,
             output.open("w", newline="", encoding="utf-8") as destination,
@@ -65,7 +73,15 @@ async def produce(path: Path, output: Path, count: int, job_id: UUID | None = No
                 payload.pop("task_id", None)
                 payload["task_id"] = str(uuid5(job_id, str(index)))
                 task = TaskMessage(task=TaskRequest.model_validate(payload))
-                rejected = await publish_with_backpressure(broker, settings, task)
+                # У каждой задачи свой корневой трейс, даже в большой пачке.
+                with (
+                    logging_config.bind_task(task.task.task_id),
+                    telemetry.get_tracer().start_as_current_span("source.task") as span,
+                ):
+                    span.set_attribute("task.id", str(task.task.task_id))
+                    span.set_attribute("job.id", str(job_id))
+                    rejected = await publish_with_backpressure(broker, settings, task)
+                    published += 1
                 writer.writerow(
                     {
                         "elapsed": time.perf_counter() - started,
@@ -76,12 +92,15 @@ async def produce(path: Path, output: Path, count: int, job_id: UUID | None = No
                 )
                 destination.flush()
                 if (index + 1) % 20 == 0:
-                    print(
-                        f"Accepted: {index + 1}; elapsed: {time.perf_counter() - started:.1f}s",
-                        flush=True,
+                    log.info(
+                        "source_progress", extra={"published": index + 1, "job_id": str(job_id)}
                     )
+        log.info("source_completed", extra={"job_id": str(job_id), "published": published})
     finally:
+        log.info("graceful_shutdown_started")
         await broker.stop()
+        log.info("graceful_shutdown_completed")
+        await asyncio.to_thread(runtime.shutdown)
 
 
 def main() -> None:
@@ -98,7 +117,11 @@ def main() -> None:
     if args.prepare:
         prepare(args.file, args.count)
     else:
-        asyncio.run(produce(args.file, args.output, args.count, args.job_id))
+        try:
+            asyncio.run(produce(args.file, args.output, args.count, args.job_id))
+        except Exception:
+            log.exception("source_failed")
+            raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

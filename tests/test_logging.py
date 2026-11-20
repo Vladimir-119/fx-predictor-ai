@@ -48,11 +48,16 @@ async def test_request_logs_success_failure_and_restore_context(client, applicat
     handler = logging.StreamHandler(stream)
     handler.setFormatter(JsonFormatter())
     monkeypatch.setattr(logging.getLogger(), "handlers", [handler])
-    response = await client.get("/healthz")
+    await client.get("/healthz")
+    assert not any(
+        json.loads(line)["message"] == "request_completed"
+        for line in stream.getvalue().splitlines()
+    )
+    response = await client.get("/api/v1/version")
     records = [json.loads(line) for line in stream.getvalue().splitlines()]
     completed = next(record for record in records if record["message"] == "request_completed")
     assert completed["request_id"] == response.headers["X-Request-ID"]
-    assert completed["path"] == "/healthz"
+    assert completed["path"] == "/api/v1/version"
     assert completed["status_code"] == 200
     assert completed["duration_ms"] >= 0
 

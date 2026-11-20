@@ -13,7 +13,7 @@ from src.schemas import ForecastRequest, ForecastResponse
 class HistoricalRate(BaseModel):
     """Один известный курс: EUR за один USD."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     date: date
     rate: float = Field(gt=0, allow_inf_nan=False)
@@ -21,6 +21,8 @@ class HistoricalRate(BaseModel):
 
 class TaskRequest(ForecastRequest):
     """Без history используется свежая БД; history нужен для пакетного пересчёта."""
+
+    model_config = ConfigDict(hide_input_in_errors=True)
 
     task_id: UUID = Field(default_factory=uuid4)
     history: list[HistoricalRate] | None = Field(default=None, min_length=20, max_length=60)
@@ -40,7 +42,7 @@ class TaskRequest(ForecastRequest):
 class TaskMessage(BaseModel):
     """Неизменяемое сообщение с временем отправки для измерения задержки."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     task: TaskRequest
     submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))

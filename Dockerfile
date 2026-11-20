@@ -30,6 +30,8 @@ LABEL org.opencontainers.image.title="fx-predictor-ai"
 RUN useradd --uid 10001 --create-home appuser
 # Код доступен для чтения, но приложение не может менять установленный пакет.
 COPY --from=builder /app/.venv /app/.venv
+COPY scripts/produce_tasks.py scripts/bootstrap_observability.py /app/scripts/
+RUN mkdir -p /app/reports && chown appuser:appuser /app/reports
 USER appuser
 
 # Порт API и проверка доступности приложения.
