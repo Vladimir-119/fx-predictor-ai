@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 10s
+scrape_configs:
+  - job_name: pipeline
+    static_configs:
+      - targets: [otel-collector:8889]
+    # Сохранить resource service.name/instance.id вместо адреса Collector.
+    honor_labels: true
+  - job_name: rabbitmq
+    metrics_path: /metrics/detailed
+    params:
+      family: [queue_coarse_metrics]
+    static_configs:
+      - targets: [rabbitmq:15692]

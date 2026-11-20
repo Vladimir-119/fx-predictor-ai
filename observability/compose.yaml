@@ -1,0 +1,176 @@
+x-observability: &observability
+  restart: unless-stopped
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  loki:
+    <<: *observability
+    profiles: [logs, observability]
+    build:
+      context: .
+      dockerfile: Dockerfile.health
+      args:
+        BASE_IMAGE: grafana/loki:${LOKI_VERSION:-3.7.10}
+    image: fx-predictor-ai-loki:${LOKI_VERSION:-3.7.10}
+    command: ["-config.file=/etc/loki/config.yaml"]
+    volumes:
+      - ./loki.yaml:/etc/loki/config.yaml:ro
+      - loki-data:/loki
+    mem_limit: 192m
+    environment:
+      GOMEMLIMIT: 128MiB
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3100/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+
+  alloy:
+    <<: *observability
+    profiles: [logs, observability]
+    build:
+      context: .
+      dockerfile: Dockerfile.health
+      args:
+        BASE_IMAGE: grafana/alloy:${ALLOY_VERSION:-v1.22.0}
+    image: fx-predictor-ai-alloy:${ALLOY_VERSION:-v1.22.0}
+    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "--storage.path=/alloy-data", "/etc/alloy/config.alloy"]
+    environment:
+      COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-fx-predictor-ai}
+      GOMEMLIMIT: 192MiB
+    volumes:
+      - ./alloy.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/alloy-data
+    depends_on:
+      loki:
+        condition: service_healthy
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:12345/-/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  tempo:
+    <<: *observability
+    profiles: [traces, observability]
+    build:
+      context: .
+      dockerfile: Dockerfile.health
+      args:
+        BASE_IMAGE: grafana/tempo:${TEMPO_VERSION:-2.9.5}
+    image: fx-predictor-ai-tempo:${TEMPO_VERSION:-2.9.5}
+    command: ["-config.file=/etc/tempo/config.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo/config.yaml:ro
+      - tempo-data:/var/tempo
+    mem_limit: 192m
+    environment:
+      GOMEMLIMIT: 128MiB
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3200/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
+  otel-collector:
+    <<: *observability
+    profiles: [traces, metrics, observability]
+    build:
+      context: .
+      dockerfile: Dockerfile.health
+      args:
+        BASE_IMAGE: otel/opentelemetry-collector-contrib:${OTEL_COLLECTOR_VERSION:-0.165.0}
+    image: fx-predictor-ai-otel:${OTEL_COLLECTOR_VERSION:-0.165.0}
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "127.0.0.1:${OTEL_PORT:-4318}:4318"
+    mem_limit: 256m
+    environment:
+      GOMEMLIMIT: 192MiB
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:13133/"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  prometheus:
+    <<: *observability
+    profiles: [metrics, observability]
+    build:
+      context: .
+      dockerfile: Dockerfile.health
+      args:
+        BASE_IMAGE: prom/prometheus:${PROMETHEUS_VERSION:-v3.16.0}
+    image: fx-predictor-ai-prometheus:${PROMETHEUS_VERSION:-v3.16.0}
+    command:
+      - --config.file=/etc/prometheus/prometheus.yaml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=2d
+      - --storage.tsdb.retention.size=256MB
+      - --web.enable-remote-write-receiver
+      - --enable-feature=exemplar-storage
+    volumes:
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    mem_limit: 192m
+    environment:
+      GOMEMLIMIT: 128MiB
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  grafana:
+    <<: *observability
+    profiles: [observability]
+    build:
+      context: .
+      dockerfile: Dockerfile.health
+      args:
+        BASE_IMAGE: grafana/grafana:${GRAFANA_VERSION:-13.3.1}
+    image: fx-predictor-ai-grafana:${GRAFANA_VERSION:-13.3.1}
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-local-grafana-change-me}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/pipeline.json
+      GOMEMLIMIT: 192MiB
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    mem_limit: 384m
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  loki-data:
+  alloy-data:
+  tempo-data:
+  prometheus-data:
+  grafana-data:

@@ -1,16 +1,22 @@
 """Общая топология RabbitMQ и публикация с подтверждением брокера."""
 
 import asyncio
+import logging
 import math
+import time
 
 from aio_pika.exceptions import AMQPException
 from faststream.message import StreamMessage, decode_message
 from faststream.rabbit import Channel, RabbitBroker, RabbitQueue
+from opentelemetry import propagate, trace
+from opentelemetry.trace import SpanKind
 from pamqp.commands import Basic
 
+from src import logging_config, telemetry
 from src.config import Settings
 from src.task_schemas import TaskMessage
 
+log = logging.getLogger(__name__)
 MAX_TASK_MESSAGE_BYTES = 128 * 1024
 
 
@@ -47,6 +53,7 @@ def create_broker(settings: Settings) -> RabbitBroker:
     return RabbitBroker(
         settings.rabbitmq_url.get_secret_value(),
         decoder=decode_task_message,
+        logger=logging.getLogger("faststream"),
         default_channel=Channel(
             prefetch_count=settings.prefetch_count,
             publisher_confirms=True,
@@ -66,22 +73,38 @@ async def connect_broker(broker: RabbitBroker, settings: Settings) -> None:
 
 async def publish_task(broker: RabbitBroker, settings: Settings, message: TaskMessage) -> None:
     """Ждать только подтверждения публикации, а не результата inference."""
-    try:
-        confirmation = await asyncio.wait_for(
-            broker.publish(
-                message.model_dump(mode="json"),
-                queue=settings.tasks_queue,
-                persist=True,
-                mandatory=True,
-                message_id=str(message.task.task_id),
+    with (
+        logging_config.bind_task(message.task.task_id),
+        telemetry.get_tracer().start_as_current_span(
+            "publish", kind=SpanKind.PRODUCER, record_exception=False, set_status_on_exception=False
+        ) as span,
+    ):
+        span.set_attribute("messaging.destination.name", settings.tasks_queue)
+        span.set_attribute("messaging.message.id", str(message.task.task_id))
+        headers: dict[str, str] = {"published_at_ns": str(time.time_ns())}
+        propagate.inject(headers)
+        try:
+            confirmation = await asyncio.wait_for(
+                broker.publish(
+                    message.model_dump(mode="json"),
+                    queue=settings.tasks_queue,
+                    persist=True,
+                    mandatory=True,
+                    message_id=str(message.task.task_id),
+                    correlation_id=str(message.task.task_id),
+                    headers=headers,
+                    timeout=settings.publish_timeout_seconds,
+                ),
                 timeout=settings.publish_timeout_seconds,
-            ),
-            timeout=settings.publish_timeout_seconds,
-        )
-    except (AMQPException, OSError, TimeoutError) as exc:
-        raise QueueUnavailableError("RabbitMQ did not accept the task") from exc
-    if confirmation is False or isinstance(confirmation, Basic.Nack):
-        raise QueueUnavailableError("RabbitMQ rejected the task")
+            )
+            if confirmation is False or isinstance(confirmation, Basic.Nack):
+                raise QueueUnavailableError("RabbitMQ rejected the task")
+        except (AMQPException, OSError, TimeoutError, QueueUnavailableError) as exc:
+            # Текст исключения драйвера может содержать DSN: в трейс идёт только тип.
+            telemetry.record_error(span, exc)
+            log.warning("broker_publish_rejected", extra={"error_type": type(exc).__name__})
+            raise QueueUnavailableError("RabbitMQ did not accept the task") from exc
+        log.info("task_published")
 
 
 async def publish_with_backpressure(
@@ -92,10 +115,19 @@ async def publish_with_backpressure(
     while True:
         try:
             await publish_task(broker, settings, message)
+            telemetry.metrics.source_published.add(1)
             return rejections
         except QueueUnavailableError:
             rejections += 1
-            await asyncio.sleep(settings.retry_delay_seconds)
+            telemetry.metrics.source_rejections.add(1)
+            trace.get_current_span().add_event("broker.rejected", {"rejections": rejections})
+            with telemetry.get_tracer().start_as_current_span("source.wait"):
+                started = time.perf_counter()
+                # Первое ожидание и редкие обновления, без сотен одинаковых строк.
+                if rejections == 1 or rejections % 20 == 0:
+                    log.warning("source_backpressure", extra={"rejections": rejections})
+                await asyncio.sleep(settings.retry_delay_seconds)
+                telemetry.metrics.source_wait.add(time.perf_counter() - started)
 
 
 def retry_after(settings: Settings) -> str:

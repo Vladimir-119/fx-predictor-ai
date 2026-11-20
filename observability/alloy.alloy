@@ -1,0 +1,55 @@
+logging {
+  level = "warn"
+  format = "json"
+}
+
+discovery.docker "project" {
+  host = "unix:///var/run/docker.sock"
+  refresh_interval = "5s"
+  filter {
+    name = "label"
+    values = ["com.docker.compose.project=" + sys.env("COMPOSE_PROJECT_NAME")]
+  }
+}
+
+discovery.relabel "project" {
+  targets = discovery.docker.project.targets
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label = "service"
+  }
+}
+
+loki.source.docker "project" {
+  host = "unix:///var/run/docker.sock"
+  targets = discovery.relabel.project.output
+  forward_to = [loki.process.project.receiver]
+}
+
+loki.process "project" {
+  stage.json {
+    expressions = {
+      service = "service",
+      level = "level",
+      env = "env",
+    }
+  }
+  stage.labels {
+    values = {
+      service = "service",
+      level = "level",
+      env = "env",
+    }
+  }
+  // Только ограниченные лейблы. task_id/trace_id остаются JSON-полями.
+  stage.label_keep {
+    values = ["service", "level", "env"]
+  }
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

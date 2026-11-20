@@ -1,5 +1,22 @@
 name: fx-predictor-ai
 
+include:
+  - observability/compose.yaml
+
+x-telemetry: &telemetry
+  OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  OTEL_EXPORTER_OTLP_TIMEOUT: ${OTEL_EXPORTER_OTLP_TIMEOUT:-1}
+  OTEL_BSP_SCHEDULE_DELAY: ${OTEL_BSP_SCHEDULE_DELAY:-1000}
+  OTEL_BSP_MAX_QUEUE_SIZE: ${OTEL_BSP_MAX_QUEUE_SIZE:-512}
+  OTEL_BSP_MAX_EXPORT_BATCH_SIZE: ${OTEL_BSP_MAX_EXPORT_BATCH_SIZE:-64}
+  OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-5000}
+  OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+  OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1}
+  OTEL_SERVICE_VERSION: ${OTEL_SERVICE_VERSION:-0.5.0}
+  OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-deployment.environment.name=${ENVIRONMENT:-development}}
+
 services:
   rabbitmq:
     image: rabbitmq:4.1-management
@@ -12,6 +29,7 @@ services:
       - "127.0.0.1:${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
+      - ./docker/rabbitmq-enabled-plugins:/etc/rabbitmq/enabled_plugins:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 5s
@@ -159,6 +177,8 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
+      <<: *telemetry
+      OTEL_SERVICE_NAME: fx-api
       DATABASE_URL: postgresql://${POSTGRES_USER:-fx_predictor}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-fx_predictor_ai}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       ENVIRONMENT: ${ENVIRONMENT:-development}
@@ -175,6 +195,9 @@ services:
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
     depends_on:
+      model-init:
+        condition: service_completed_successfully
+        required: false
       rabbitmq:
         condition: service_healthy
       db-init:
@@ -193,13 +216,17 @@ services:
     restart: unless-stopped
 
   inference-worker:
-    profiles: [tasks]
+    profiles: [tasks, observability]
     image: ${APP_IMAGE:-fx-predictor-ai:local}
     build:
       context: .
       dockerfile: Dockerfile
     command: ["uv", "run", "--no-project", "uvicorn", "src.inference_worker:app", "--host", "0.0.0.0", "--port", "8001", "--no-access-log", "--timeout-graceful-shutdown", "65"]
     environment:
+      <<: *telemetry
+      OTEL_SERVICE_NAME: fx-inference-worker
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       DATABASE_URL: postgresql://${POSTGRES_USER:-fx_predictor}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-fx_predictor_ai}
       MLFLOW_TRACKING_URI: http://mlflow:5000
       MODEL_NAME: ${MODEL_NAME:-fx-predictor-ai-forecaster}
@@ -212,6 +239,9 @@ services:
       INFERENCE_DELAY_SECONDS: ${INFERENCE_DELAY_SECONDS:-1}
       TASK_MAX_ATTEMPTS: ${TASK_MAX_ATTEMPTS:-3}
     depends_on:
+      model-init:
+        condition: service_completed_successfully
+        required: false
       rabbitmq:
         condition: service_healthy
       db-init:
@@ -243,6 +273,10 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
+      <<: *telemetry
+      OTEL_SERVICE_NAME: fx-rate-worker
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       DATABASE_URL: postgresql://${POSTGRES_USER:-fx_predictor}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-fx_predictor_ai}
       UPDATE_INTERVAL_SECONDS: ${UPDATE_INTERVAL_SECONDS:-3600}
     command: ["uv", "run", "--no-project", "python", "-m", "src.services.rates", "worker"]
@@ -263,6 +297,64 @@ services:
         max-file: "3"
     restart: unless-stopped
 
+  model-init:
+    profiles: [observability]
+    image: ${APP_IMAGE:-fx-predictor-ai:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["uv", "run", "--no-project", "python", "/app/scripts/bootstrap_observability.py"]
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MODEL_NAME: ${MODEL_NAME:-fx-predictor-ai-forecaster}
+      MODEL_ALIAS: ${MODEL_ALIAS:-champion}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    volumes:
+      - ./data:/app/data:ro
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    mem_limit: 768m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  source:
+    profiles: [source]
+    image: ${APP_IMAGE:-fx-predictor-ai:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      <<: *telemetry
+      OTEL_SERVICE_NAME: fx-source
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-fx_predictor}:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/
+      TASKS_QUEUE: ${TASKS_QUEUE:-fx-predictor-ai.tasks}
+      QUEUE_LIMIT: ${QUEUE_LIMIT:-20}
+      INFERENCE_DELAY_SECONDS: ${INFERENCE_DELAY_SECONDS:-1}
+    entrypoint: ["uv", "run", "--no-project", "python", "/app/scripts/produce_tasks.py"]
+    command: ["--file", "/app/reports/tasks.jsonl", "--output", "/app/reports/producer.csv", "--count", "300"]
+    volumes:
+      - ./reports:/app/reports
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    cpus: "0.50"
+    mem_limit: 384m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   rabbitmq-data:
   postgres-data:
@@ -270,4 +362,4 @@ volumes:
 
 networks:
   default:
-    name: fx-predictor-ai-network
+    name: ${COMPOSE_PROJECT_NAME:-fx-predictor-ai}-network

@@ -18,6 +18,7 @@ env:
   MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD: "false"
   MLFLOW_ENABLE_PROXY_MULTIPART_UPLOAD: "false"
   MLFLOW_DISABLE_TELEMETRY: "true"
+  OTEL_SDK_DISABLED: "true"
 
 jobs:
   quality:
@@ -101,6 +102,7 @@ jobs:
           echo "::add-mask::$PASSWORD"
           echo "POSTGRES_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
           echo "RABBITMQ_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+          echo "GRAFANA_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
           STORAGE_PASSWORD=$(openssl rand -hex 24)
           echo "::add-mask::$STORAGE_PASSWORD"
           echo "RUSTFS_SECRET_KEY=$STORAGE_PASSWORD" >> "$GITHUB_ENV"
@@ -158,12 +160,22 @@ jobs:
         env:
           MLOPS_TEST_DATABASE: "1"
         run: uv run --frozen --extra web --extra ml pytest -q tests/test_ml_integration.py --no-cov
+      - name: Start the provisioned observability stack
+        run: |
+          OTEL_SDK_DISABLED=false MODEL_ALIAS=champion docker compose --profile observability up -d --build --wait --wait-timeout 360
+      - name: Verify logs, traces, metrics and Grafana provisioning
+        env:
+          RUN_OBSERVABILITY_TESTS: "1"
+        run: uv run --frozen --extra web --extra ml pytest -q tests/test_observability_integration.py --no-cov
+      - name: Record container memory usage
+        if: always() && steps.prepare_env.outcome == 'success'
+        run: docker compose --profile "*" stats --no-stream >> "$GITHUB_STEP_SUMMARY"
       - name: Container logs
         if: always() && steps.prepare_env.outcome == 'success'
-        run: docker compose --profile tasks logs --no-color
+        run: docker compose --profile "*" logs --no-color
       - name: Clean up
         if: always() && steps.prepare_env.outcome == 'success'
-        run: docker compose --profile tasks down -v
+        run: docker compose --profile "*" down -v
 
   publish:
     name: Publish versioned image to GHCR

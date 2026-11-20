@@ -1,5 +1,8 @@
 """Загрузка конкретной версии один раз и inference без запросов к Registry."""
 
+import asyncio
+import time
+from contextvars import copy_context
 from datetime import datetime
 
 import asyncpg
@@ -11,6 +14,7 @@ from mlflow import MlflowClient
 from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
 
+from src import telemetry
 from src.config import Settings
 from src.ml.features import FEATURE_COLUMNS, FEATURE_SET, MIN_HISTORY, latest_features
 from src.schemas import ForecastRequest, ForecastResponse, ModelStatus
@@ -70,6 +74,29 @@ def predict_rate(model: LoadedModel, history: pd.DataFrame) -> float:
     return predicted
 
 
+async def infer_rate(model: LoadedModel, history: pd.DataFrame, delay_seconds: float = 0) -> float:
+    """Измерить inference, явно сохранив контекст при переходе в пул потоков."""
+    started = time.perf_counter()
+    with telemetry.get_tracer().start_as_current_span(
+        "inference", record_exception=False, set_status_on_exception=False
+    ) as span:
+        span.set_attributes(
+            {
+                "model.alias": model.status.alias_at_startup,
+                "model.version": model.status.version,
+            }
+        )
+        try:
+            await asyncio.sleep(delay_seconds)
+            context = copy_context()
+            return await run_in_threadpool(context.run, predict_rate, model, history)
+        except Exception as exc:
+            telemetry.record_error(span, exc)
+            raise
+        finally:
+            telemetry.metrics.inference_duration.record(time.perf_counter() - started)
+
+
 async def forecast(
     request: ForecastRequest,
     model: LoadedModel,
@@ -77,6 +104,7 @@ async def forecast(
     now: datetime,
     *,
     save: bool = True,
+    delay_seconds: float = 0,
 ) -> ForecastResponse:
     """Построить прогноз из актуальной истории и сохранить его происхождение."""
     history = await load_history(pool, now.date())
@@ -90,7 +118,7 @@ async def forecast(
     target_date = next_publication_date(as_of)
     if request.forecast_date is not None and request.forecast_date != target_date:
         raise InvalidForecastDateError(f"Only the next ECB publication is supported: {target_date}")
-    predicted = await run_in_threadpool(predict_rate, model, history)
+    predicted = await infer_rate(model, history, delay_seconds)
     response = ForecastResponse(
         as_of=as_of,
         forecast_date=target_date,

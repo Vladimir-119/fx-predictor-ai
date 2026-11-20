@@ -77,7 +77,7 @@ restart-api:
 	docker compose restart app
 
 down:
-	docker compose --profile worker --profile tasks down
+	docker compose --profile "*" down
 
 logs:
 	docker compose logs -f app
@@ -118,3 +118,48 @@ benchmark:
 .PHONY: task-file
 task-file:
 	$(UV) python scripts/produce_tasks.py --prepare
+
+# Наблюдаемость включается отдельно от повседневной разработки.
+COUNT ?= 300
+CONCURRENCY ?= 20
+MODE ?= normal
+DEMO_COUNT ?= $(if $(filter overload,$(MODE)),$(COUNT),1)
+
+.PHONY: obs-up obs-down obs-source obs-demo obs-two obs-one obs-stats obs-logs obs-traces obs-metrics
+obs-up obs-source obs-two obs-one: export OTEL_SDK_DISABLED = false
+
+obs-up:
+	docker compose --profile observability up -d --build --wait --wait-timeout 360
+
+obs-down:
+	docker compose --profile observability stop alloy loki tempo otel-collector prometheus grafana
+
+obs-source:
+	$(UV) python scripts/produce_tasks.py --prepare --count $(COUNT)
+	docker compose --profile observability run --rm source --file /app/reports/tasks.jsonl --output /app/reports/producer.csv --count $(COUNT)
+
+obs-demo:
+	$(UV) python scripts/observability_demo.py --mode $(MODE) --count $(DEMO_COUNT) --concurrency $(CONCURRENCY)
+
+obs-two:
+	docker compose --profile observability up -d --scale inference-worker=2 --wait inference-worker
+
+obs-one:
+	docker compose --profile observability up -d --scale inference-worker=1 --wait inference-worker
+
+obs-stats:
+	docker compose --profile observability stats --no-stream
+
+obs-logs:
+	docker compose --profile logs up -d --build --wait loki alloy
+
+obs-traces:
+	docker compose --profile traces up -d --build --wait tempo otel-collector
+
+obs-metrics:
+	docker compose --profile metrics up -d --build --wait prometheus otel-collector
+
+.PHONY: obs-test
+obs-test: export RUN_OBSERVABILITY_TESTS = 1
+obs-test:
+	$(UV) python -c "from dotenv import load_dotenv; load_dotenv(); import pytest; raise SystemExit(pytest.main(['-q', 'tests/test_observability_integration.py', '--no-cov']))"

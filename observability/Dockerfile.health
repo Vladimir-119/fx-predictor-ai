@@ -1,0 +1,5 @@
+# Статический wget делает HTTP healthcheck доступным и в distroless-образах.
+ARG BASE_IMAGE
+FROM busybox:1.37.0-musl AS probe
+FROM ${BASE_IMAGE}
+COPY --from=probe /bin/busybox /busybox
