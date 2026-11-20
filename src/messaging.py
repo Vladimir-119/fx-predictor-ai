@@ -11,6 +11,8 @@ from pamqp.commands import Basic
 from src.config import Settings
 from src.task_schemas import TaskMessage
 
+MAX_TASK_MESSAGE_BYTES = 128 * 1024
+
 
 class QueueUnavailableError(RuntimeError):
     """Брокер не подтвердил приём; источник решает, ждать ему или вернуть 503."""
@@ -18,9 +20,12 @@ class QueueUnavailableError(RuntimeError):
 
 def decode_task_message(message: StreamMessage) -> object:
     """Повреждённый JSON тоже доходит до handler и DLQ, а не зависает unacked."""
+    if len(message.body) > MAX_TASK_MESSAGE_BYTES:
+        # Не копировать большой вредоносный payload в JSON/hex и затем в DLQ.
+        return {"rejected_message": "Task message is too large", "size_bytes": len(message.body)}
     try:
         return decode_message(message)
-    except ValueError:
+    except (ValueError, RecursionError):
         return message.body
 
 

@@ -37,11 +37,13 @@ def test_dataset_download_checksum_currency_direction_and_validation(tmp_path, m
     monkeypatch.setattr(data, "MANIFEST_PATH", manifest)
     calls = []
 
-    def download(url, **kwargs):
-        calls.append(url)
-        return httpx.Response(200, content=content, request=httpx.Request("GET", url))
+    def download(request):
+        calls.append(str(request.url))
+        return httpx.Response(200, content=content)
 
-    monkeypatch.setattr(data.httpx, "get", download)
+    original = httpx.Client
+    transport = httpx.MockTransport(download)
+    monkeypatch.setattr(data.httpx, "Client", lambda **kwargs: original(transport=transport))
     assert data.download_snapshot() == raw_path
     assert data.download_snapshot() == raw_path
     assert len(calls) == 1
@@ -55,6 +57,10 @@ def test_dataset_download_checksum_currency_direction_and_validation(tmp_path, m
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="checksum"):
+        data.download_snapshot()
+    assert not raw_path.exists()
+    monkeypatch.setattr(data, "MAX_SNAPSHOT_BYTES", 16)
+    with pytest.raises(ValueError, match="size limit"):
         data.download_snapshot()
     assert not raw_path.exists()
 

@@ -32,6 +32,8 @@ def prepare(path: Path, count: int) -> None:
 
 async def produce(path: Path, output: Path, count: int, job_id: UUID | None = None) -> None:
     """В памяти только одна задача; новый task_id для каждого запуска файла."""
+    if path.resolve() in {output.resolve(), output.with_suffix(".job-id").resolve()}:
+        raise ValueError("Producer output must not overwrite the input file")
     settings = get_settings()
     broker = create_broker(settings)
     await connect_broker(broker, settings)

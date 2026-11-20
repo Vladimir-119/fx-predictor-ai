@@ -149,6 +149,48 @@ async def test_task_api_accepts_reports_overload_and_validates_ids(
     assert (await client.post("/api/v1/tasks", json={"history": []})).status_code == 422
 
 
+async def test_task_api_bounds_streamed_input_and_accepts_full_history(
+    client, application, monkeypatch
+):
+    """Размер проверяется до JSON и не зависит от заявленного Content-Length."""
+    submitter = AsyncMock(return_value={"task_id": uuid4(), "status": "QUEUED"})
+    application.state.task_broker = SimpleNamespace(stop=AsyncMock())
+    monkeypatch.setattr(tasks, "submit_task", submitter)
+    history = [
+        {"date": day.date().isoformat(), "rate": 0.8}
+        for day in pd.bdate_range(end="2026-10-07", periods=60)
+    ]
+    assert (await client.post("/api/v1/tasks", json={"history": history})).status_code == 202
+    submitter.reset_mock()
+    for body in (
+        {"typo": "ignored before"},
+        {"history": [dict(row, extra="bad") for row in history]},
+    ):
+        assert (await client.post("/api/v1/tasks", json=body)).status_code == 422
+    for invalid_history in (
+        list(reversed(history)),
+        [history[0]] * 20,
+        [*history[:-1], {"date": "9999-12-31", "rate": 0.8}],
+    ):
+        response = await client.post("/api/v1/tasks", json={"history": invalid_history})
+        assert response.status_code == 422
+    submitter.assert_not_awaited()
+
+    async def chunks():
+        for _ in range(5):
+            yield b" " * (16 * 1024)
+
+    for headers in ({}, {"Content-Length": "1"}):
+        response = await client.post("/api/v1/tasks", content=chunks(), headers=headers)
+        assert response.status_code == 413
+        assert response.json() == {"detail": "Request body exceeds 64 KiB"}
+        assert response.headers["X-Request-ID"]
+    response = await client.post("/process", content=b" " * (64 * 1024 + 1))
+    assert response.status_code == 413
+    submitter.assert_not_awaited()
+    assert (await client.get("/healthz")).status_code == 200
+
+
 async def test_task_result_decodes_jsonb(store, message, loaded, settings):
     pool, connection = store
     pool.fetchrow.return_value = None
@@ -250,6 +292,32 @@ async def test_invalid_messages_and_dlq_failure_are_not_silently_acked(settings,
     for malformed in ("not JSON", b"\xff"):
         await worker.handle(malformed, delivery)
     assert delivery.ack.await_count == 3
+
+
+async def test_decoder_bounds_large_and_deep_json_before_quarantining(settings, store, loaded):
+    pool, connection = store
+    broker = SimpleNamespace(publish=AsyncMock(return_value=Basic.Ack()))
+    worker = TaskWorker(settings, pool, loaded, broker)
+    delivery = AsyncMock()
+    oversized = b" " * (messaging.MAX_TASK_MESSAGE_BYTES + 1)
+    rejected = messaging.decode_task_message(
+        SimpleNamespace(body=oversized, content_type="application/json")
+    )
+    assert rejected == {
+        "rejected_message": "Task message is too large",
+        "size_bytes": len(oversized),
+    }
+    await worker.handle(rejected, delivery)
+    deep = b"[" * 2000 + b"0" + b"]" * 2000
+    decoded = messaging.decode_task_message(
+        SimpleNamespace(body=deep, content_type="application/json")
+    )
+    await worker.handle(decoded, delivery)
+    assert delivery.ack.await_count == 2
+    connection.fetchval.assert_not_awaited()
+    assert all(
+        call.args[0]["error"] == "Invalid task schema" for call in broker.publish.call_args_list
+    )
 
 
 async def test_worker_live_history_and_horizon(settings, store, loaded, message, monkeypatch):

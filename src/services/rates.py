@@ -17,12 +17,20 @@ from src.ml.data import RAW_PATH, verify_snapshot
 from src.schemas import DisplayRate, RateObservation, RatesResponse
 
 log = logging.getLogger(__name__)
+MAX_ECB_XML_BYTES = 32 * 1024 * 1024
 UPSERT_RATE = """
 INSERT INTO exchange_rates (source, base, quote, rate_type, rate_date, value)
 VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (source, base, quote, rate_type, rate_date)
 DO UPDATE SET value = EXCLUDED.value, fetched_at = now()
 """
+
+
+class EcbTreeBuilder(ElementTree.TreeBuilder):
+    """Официальному XML не нужны DTD и подстановка пользовательских сущностей."""
+
+    def doctype(self, name: str, public_id: str | None, system_id: str | None) -> None:
+        raise ValueError("ECB XML must not contain a document type declaration")
 
 
 def is_publication_day(day: date) -> bool:
@@ -60,7 +68,9 @@ def expected_latest_date(now: datetime) -> date:
 def parse_ecb_xml(content: bytes) -> list[RateObservation]:
     """Прочитать опубликованные даты и котировки из официального XML."""
     try:
-        root = ElementTree.fromstring(content)
+        root = ElementTree.fromstring(
+            content, parser=ElementTree.XMLParser(target=EcbTreeBuilder())
+        )
     except ElementTree.ParseError as exc:
         raise ValueError("ECB returned invalid XML") from exc
     observations = []
@@ -98,10 +108,15 @@ async def save_rates(pool: asyncpg.Pool, observations: list[RateObservation]) ->
 
 async def update_rates(pool: asyncpg.Pool, settings: Settings) -> int:
     """Загрузить последние 90 дней и восполнить пропуски после остановки."""
+    content = bytearray()
     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-        response = await client.get(settings.ecb_history_url)
-    response.raise_for_status()
-    observations = parse_ecb_xml(response.content)
+        async with client.stream("GET", settings.ecb_history_url) as response:
+            response.raise_for_status()
+            async for chunk in response.aiter_bytes():
+                if len(content) + len(chunk) > MAX_ECB_XML_BYTES:
+                    raise ValueError("ECB response exceeds the size limit")
+                content.extend(chunk)
+    observations = parse_ecb_xml(bytes(content))
     return await save_rates(pool, observations)
 
 

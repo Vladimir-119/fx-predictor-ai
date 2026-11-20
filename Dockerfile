@@ -28,7 +28,8 @@ LABEL org.opencontainers.image.title="fx-predictor-ai"
 
 # Приложение работает от отдельного пользователя без прав root.
 RUN useradd --uid 10001 --create-home appuser
-COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
+# Код доступен для чтения, но приложение не может менять установленный пакет.
+COPY --from=builder /app/.venv /app/.venv
 USER appuser
 
 # Порт API и проверка доступности приложения.

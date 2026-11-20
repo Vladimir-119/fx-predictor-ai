@@ -4,7 +4,7 @@ from datetime import date
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LivenessResponse(BaseModel):
@@ -70,6 +70,8 @@ class RateObservation(BaseModel):
 
 class ForecastRequest(BaseModel):
     """Одна поддерживаемая пара и следующая дата публикации."""
+
+    model_config = ConfigDict(extra="forbid")
 
     pair: Literal["USD/EUR"] = "USD/EUR"
     forecast_date: date | None = None

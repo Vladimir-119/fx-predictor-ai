@@ -23,6 +23,7 @@ def settings():
         db_pool_max_size=5,
         model_alias="",
         tasks_enabled=False,
+        allowed_hosts=["localhost", "127.0.0.1", "app", "test"],
     )
 
 
