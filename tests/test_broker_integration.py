@@ -213,7 +213,7 @@ async def test_real_api_rollback_worker_idempotency_dlq_and_graceful_shutdown(
         await asyncio.sleep(0.1)
         assert worker.completed == 3
         poison = task_message()
-        poison.task.history.reverse()
+        poison.task.forecast_date = poison.task.history[-1].date
         await messaging.publish_task(broker, settings, poison)
         for _ in range(100):
             row = await postgres_pool.fetchrow(
@@ -222,19 +222,39 @@ async def test_real_api_rollback_worker_idempotency_dlq_and_graceful_shutdown(
             if row and row["status"] == "FAILED":
                 break
             await asyncio.sleep(0.05)
+        assert row is not None
         assert row["status"] == "FAILED" and row["attempts"] == 3
         inspect = await aio_pika.connect_robust(rabbit_url)
         inspect_channel = await inspect.channel()
         dlq = await inspect_channel.declare_queue(f"{settings.tasks_queue}.dlq", passive=True)
         assert dlq.declaration_result.message_count == 1
+        invalid = task_message()
+        invalid.task.history.reverse()
+        await messaging.publish_task(broker, settings, invalid)
+        for _ in range(100):
+            await dlq.declare()
+            if dlq.declaration_result.message_count == 2:
+                break
+            await asyncio.sleep(0.05)
+        assert dlq.declaration_result.message_count == 2
+        assert (
+            await postgres_pool.fetchval(
+                "SELECT count(*) FROM tasks WHERE task_id = $1", invalid.task.task_id
+            )
+            == 0
+        )
         await inspect.close()
         settings.inference_delay_seconds = 0.2
         final = task_message()
         await messaging.publish_task(broker, settings, final)
         for _ in range(100):
-            if worker.active:
+            final_status = await postgres_pool.fetchval(
+                "SELECT status FROM tasks WHERE task_id = $1", final.task.task_id
+            )
+            if final_status == "RUNNING":
                 break
             await asyncio.sleep(0.01)
+        assert final_status == "RUNNING"
         assert worker.active == 1
         await broker.stop()
         assert (
