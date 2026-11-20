@@ -253,26 +253,29 @@ async def main() -> None:
         readme.write_text(before + start + "\n" + report + end + after, encoding="utf-8")
         print(text)
         print("Graphs and measurements:", output)
-        compose(
-            [
-                "up",
-                "-d",
-                "--no-deps",
-                "--force-recreate",
-                "--wait",
-                "--wait-timeout",
-                "120",
-                "--scale",
-                "inference-worker=1",
-                "app",
-                "inference-worker",
-            ],
-            dict(os.environ),
-        )
         if any(row["failed"] for row in results):
             raise RuntimeError("Some tasks FAILED; inspect durations CSV and worker logs")
     finally:
-        client.close()
+        try:
+            # Восстановить обычную очередь и лимиты даже при ошибке или Ctrl+C.
+            compose(
+                [
+                    "up",
+                    "-d",
+                    "--no-deps",
+                    "--force-recreate",
+                    "--wait",
+                    "--wait-timeout",
+                    "120",
+                    "--scale",
+                    "inference-worker=1",
+                    "app",
+                    "inference-worker",
+                ],
+                dict(os.environ),
+            )
+        finally:
+            client.close()
 
 
 if __name__ == "__main__":

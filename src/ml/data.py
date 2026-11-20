@@ -10,6 +10,7 @@ import pandas as pd
 
 MANIFEST_PATH = Path("data/manifest.json")
 RAW_PATH = Path("data/raw/ecb.csv")
+MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
 
 
 def read_manifest() -> dict[str, str | int]:
@@ -32,12 +33,18 @@ def download_snapshot() -> Path:
         verify_snapshot()
         return RAW_PATH
     manifest = read_manifest()
-    response = httpx.get(str(manifest["download_url"]), timeout=120, follow_redirects=True)
-    response.raise_for_status()
-    if hashlib.sha256(response.content).hexdigest() != manifest["sha256"]:
+    content = bytearray()
+    with httpx.Client(timeout=120, follow_redirects=True) as client:
+        with client.stream("GET", str(manifest["download_url"])) as response:
+            response.raise_for_status()
+            for chunk in response.iter_bytes():
+                if len(content) + len(chunk) > MAX_SNAPSHOT_BYTES:
+                    raise ValueError("Downloaded dataset exceeds the size limit")
+                content.extend(chunk)
+    if hashlib.sha256(content).hexdigest() != manifest["sha256"]:
         raise ValueError("Downloaded dataset has an unexpected checksum")
     RAW_PATH.parent.mkdir(parents=True, exist_ok=True)
-    RAW_PATH.write_bytes(response.content)
+    RAW_PATH.write_bytes(content)
     return RAW_PATH
 
 

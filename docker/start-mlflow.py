@@ -6,6 +6,10 @@ from urllib.parse import quote
 user = quote(os.environ["POSTGRES_USER"], safe="")
 password = quote(os.environ["POSTGRES_PASSWORD"], safe="")
 database = quote(os.environ["MLFLOW_DB"], safe="")
+# Пароль не должен попадать в аргументы процесса и вывод docker top / ps.
+os.environ["MLFLOW_BACKEND_STORE_URI"] = (
+    f"postgresql+psycopg2://{user}:{password}@postgres:5432/{database}"
+)
 os.execvp(
     "uv",
     [
@@ -20,8 +24,6 @@ os.execvp(
         "5000",
         "--workers",
         "1",
-        "--backend-store-uri",
-        f"postgresql+psycopg2://{user}:{password}@postgres:5432/{database}",
         "--artifacts-destination",
         f"s3://{os.environ['MLFLOW_BUCKET']}",
         "--allowed-hosts",

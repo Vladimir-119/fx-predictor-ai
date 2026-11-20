@@ -3,10 +3,26 @@
 import contextvars
 import json
 import logging
+import re
 import sys
 from datetime import UTC, datetime
 
 REQUEST_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("request_id", default=None)
+URL_CREDENTIALS = re.compile(r"([a-z][a-z0-9+.-]{0,31}://)[^/\s]+@", re.IGNORECASE)
+NAMED_SECRETS = re.compile(
+    r"(\b(?:password|passwd|secret|secret_key|aws_secret_access_key|api[_-]key|token|"
+    r"authorization|x-amz-security-token|x-amz-signature)[\"']?\s*[:=]\s*)"
+    r"(?:'[^']*'|\"[^\"]*\"|[^\s,;&]+)",
+    re.IGNORECASE,
+)
+AUTH_TOKEN = re.compile(r"\b(Bearer|Basic)\s+[a-z0-9._~+/=-]+", re.IGNORECASE)
+
+
+def redact_secrets(value: str) -> str:
+    """Скрыть credentials в URL и явно названные секреты, сохранив traceback."""
+    value = URL_CREDENTIALS.sub(r"\1***@", value)
+    value = AUTH_TOKEN.sub(r"\1 ***", value)
+    return NAMED_SECRETS.sub(r"\1***", value)
 
 
 class JsonFormatter(logging.Formatter):
@@ -35,6 +51,9 @@ class JsonFormatter(logging.Formatter):
                 data[field] = getattr(record, field)
         if record.exc_info:
             data["exception"] = self.formatException(record.exc_info)
+        for field, value in data.items():
+            if isinstance(value, str):
+                data[field] = redact_secrets(value)
         return json.dumps(data, ensure_ascii=False)
 
 

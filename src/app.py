@@ -8,13 +8,52 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from starlette.concurrency import run_in_threadpool
-from starlette.responses import Response
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from src import config, db, logging_config, messaging
 from src.api import health, hello, process, tasks, version
 from src.services import prediction
 
 log = logging.getLogger(__name__)
+MAX_REQUEST_BODY_BYTES = 64 * 1024
+
+
+class RequestBodyLimitMiddleware:
+    """Ограничить фактическое тело до разбора JSON, включая chunked-запросы."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        body = bytearray()
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            chunk = message.get("body", b"")
+            if len(body) + len(chunk) > MAX_REQUEST_BODY_BYTES:
+                response = JSONResponse({"detail": "Request body exceeds 64 KiB"}, status_code=413)
+                await response(scope, receive, send)
+                return
+            body.extend(chunk)
+            if not message.get("more_body", False):
+                break
+
+        pending = True
+
+        async def receive_body() -> Message:
+            nonlocal pending
+            if pending:
+                pending = False
+                return {"type": "http.request", "body": bytes(body), "more_body": False}
+            return await receive()
+
+        await self.app(scope, receive_body, send)
 
 
 @asynccontextmanager
@@ -54,6 +93,10 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     """Собрать приложение; тесты могут передать собственные настройки."""
     settings = settings or config.get_settings()
     app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
+    app.add_middleware(RequestBodyLimitMiddleware)
+    app.add_middleware(
+        TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts, www_redirect=False
+    )
     app.state.settings = settings
     app.state.forecast_model = None
     app.state.task_broker = None

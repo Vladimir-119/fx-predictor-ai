@@ -3,10 +3,11 @@
 import csv
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pandas as pd
+import pytest
 
 from scripts import benchmark, produce_tasks
 from src.task_schemas import TaskRequest
@@ -46,6 +47,14 @@ async def test_prepared_windows_and_restart_keep_stable_task_ids(tmp_path, monke
     assert output.with_suffix(".job-id").read_text().strip()
     assert broker.stop.await_count == 3
 
+    original = source.read_bytes()
+    for destination in (source, source.with_suffix(".csv")):
+        input_path = source if destination == source else destination.with_suffix(".job-id")
+        input_path.write_bytes(original)
+        with pytest.raises(ValueError, match="overwrite"):
+            await produce_tasks.produce(input_path, destination, 2)
+        assert input_path.read_bytes() == original
+
 
 def test_benchmark_ignores_a_partially_written_csv_row(tmp_path):
     path = tmp_path / "producer.csv"
@@ -54,3 +63,22 @@ def test_benchmark_ignores_a_partially_written_csv_row(tmp_path):
     assert benchmark.read_publications(path) == [
         {"elapsed": "0.1", "task_id": "complete", "rss_bytes": "100"}
     ]
+
+
+async def test_failed_benchmark_restores_regular_worker_configuration(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "tasks.jsonl"
+    source.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(benchmark.sys, "argv", ["benchmark.py", "--file", str(source)])
+    client = SimpleNamespace(close=MagicMock())
+    restore = MagicMock()
+    monkeypatch.setattr(benchmark.docker, "from_env", lambda: client)
+    monkeypatch.setattr(benchmark, "compose", restore)
+    monkeypatch.setattr(benchmark, "run_case", AsyncMock(side_effect=RuntimeError("failed run")))
+    with pytest.raises(RuntimeError, match="failed run"):
+        await benchmark.main()
+    restore.assert_called_once()
+    arguments, environment = restore.call_args.args
+    assert "inference-worker=1" in arguments
+    assert environment == dict(benchmark.os.environ)
+    client.close.assert_called_once()

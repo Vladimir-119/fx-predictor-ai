@@ -1,16 +1,19 @@
 """Сообщения очереди и публичные ответы API задач."""
 
 from datetime import UTC, date, datetime
+from itertools import pairwise
 from typing import Literal
 from uuid import UUID, uuid4
 
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 from src.schemas import ForecastRequest, ForecastResponse
 
 
 class HistoricalRate(BaseModel):
     """Один известный курс: EUR за один USD."""
+
+    model_config = ConfigDict(extra="forbid")
 
     date: date
     rate: float = Field(gt=0, allow_inf_nan=False)
@@ -22,9 +25,22 @@ class TaskRequest(ForecastRequest):
     task_id: UUID = Field(default_factory=uuid4)
     history: list[HistoricalRate] | None = Field(default=None, min_length=20, max_length=60)
 
+    @field_validator("history")
+    @classmethod
+    def validate_history(cls, history: list[HistoricalRate] | None) -> list[HistoricalRate] | None:
+        """Отклонить некорректную историю до публикации задачи в брокер."""
+        if history:
+            if any(current.date <= previous.date for previous, current in pairwise(history)):
+                raise ValueError("History dates must be unique and strictly increasing")
+            if history[-1].date > datetime.now(UTC).date():
+                raise ValueError("History cannot contain future observations")
+        return history
+
 
 class TaskMessage(BaseModel):
     """Неизменяемое сообщение с временем отправки для измерения задержки."""
+
+    model_config = ConfigDict(extra="forbid")
 
     task: TaskRequest
     submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))

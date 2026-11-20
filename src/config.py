@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     version: ClassVar[str] = package_version(app_name)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     environment: str = "development"
+    allowed_hosts: list[str] = Field(
+        default_factory=lambda: ["localhost", "127.0.0.1", "app"], min_length=1
+    )
     database_url: SecretStr = SecretStr("postgresql://localhost:5433/fx_predictor_ai")
     health_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
     db_pool_max_size: int = Field(default=5, ge=1, le=100)

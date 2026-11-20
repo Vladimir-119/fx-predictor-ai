@@ -34,6 +34,8 @@ async def test_source_is_validated_and_imports_are_atomic(settings, monkeypatch,
         b"<Envelope/>",
         XML.replace(b"1.2", b"0"),
         XML.replace(b"JPY", b"USD"),
+        b'<!DOCTYPE Envelope [<!ENTITY rate "1.2">]><Envelope/>',
+        '<!DOCTYPE Envelope [<!ENTITY rate "1.2">]><Envelope/>'.encode("utf-16"),
     ):
         with pytest.raises(ValueError):
             rates.parse_ecb_xml(invalid)
@@ -73,6 +75,17 @@ async def test_source_is_validated_and_imports_are_atomic(settings, monkeypatch,
     monkeypatch.setattr(rates, "verify_snapshot", MagicMock())
     assert await rates.import_snapshot(pool) == 1
     assert connection.executemany.call_args.args[1][0][-1] == 1.2
+
+
+async def test_oversized_ecb_response_is_rejected_before_database_write(settings, monkeypatch):
+    monkeypatch.setattr(rates, "MAX_ECB_XML_BYTES", 16)
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, content=XML))
+    original = httpx.AsyncClient
+    monkeypatch.setattr(rates.httpx, "AsyncClient", lambda **kwargs: original(transport=transport))
+    pool = AsyncMock()
+    with pytest.raises(ValueError, match="size limit"):
+        await rates.update_rates(pool, settings)
+    pool.acquire.assert_not_called()
 
 
 async def test_rates_are_normalized_and_history_is_sorted(pool):

@@ -52,3 +52,13 @@ async def test_liveness_remains_responsive_during_database_check(client, pool):
     finally:
         release.set()
         await task
+
+
+async def test_api_rejects_untrusted_host_before_accessing_dependencies(client, pool):
+    response = await client.get("/api/v1/health", headers={"Host": "attacker.example"})
+    assert response.status_code == 400
+    assert response.headers["X-Request-ID"]
+    pool.fetchval.assert_not_awaited()
+    for host in ("localhost:8000", "127.0.0.1:8000", "app:8000"):
+        response = await client.get("/healthz", headers={"Host": host})
+        assert response.status_code == 200

@@ -28,6 +28,8 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Install uv and Python
         uses: astral-sh/setup-uv@v9.0.0
         with:
@@ -90,6 +92,18 @@ jobs:
       API_BASE_URL: http://127.0.0.1:8000
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Generate temporary database and storage passwords
+        id: prepare_env
+        run: |
+          PASSWORD=$(openssl rand -hex 24)
+          echo "::add-mask::$PASSWORD"
+          echo "POSTGRES_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+          echo "RABBITMQ_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+          STORAGE_PASSWORD=$(openssl rand -hex 24)
+          echo "::add-mask::$STORAGE_PASSWORD"
+          echo "RUSTFS_SECRET_KEY=$STORAGE_PASSWORD" >> "$GITHUB_ENV"
       - uses: astral-sh/setup-uv@v9.0.0
         with:
           version: ${{ env.UV_VERSION }}
@@ -100,23 +114,26 @@ jobs:
         env:
           RUN_BROKER_TESTS: "1"
         run: uv run --frozen --extra web --extra ml pytest -q tests/test_broker_integration.py --no-cov
-      - name: Generate temporary database and storage passwords
-        run: |
-          PASSWORD=$(openssl rand -hex 24)
-          echo "::add-mask::$PASSWORD"
-          echo "POSTGRES_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
-          echo "RABBITMQ_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
-          STORAGE_PASSWORD=$(openssl rand -hex 24)
-          echo "::add-mask::$STORAGE_PASSWORD"
-          echo "RUSTFS_SECRET_KEY=$STORAGE_PASSWORD" >> "$GITHUB_ENV"
       - name: Validate Compose and build the stack
         run: |
           docker compose config --quiet
           docker compose up -d --build --wait --wait-timeout 240
-      - name: Verify non-root user and absence of dev dependencies
+      - name: Verify container permissions and absence of dev dependencies
         run: |
           test "$(docker compose exec -T app id -u)" = "10001"
-          docker compose exec -T app uv run --no-project --no-sync python -c "import importlib.util; assert importlib.util.find_spec('pytest') is None; assert importlib.util.find_spec('ruff') is None"
+          docker compose exec -T app uv run --no-project --no-sync python - <<'PY'
+          import importlib.util
+          import os
+          import sys
+          from pathlib import Path
+
+          assert importlib.util.find_spec("pytest") is None
+          assert importlib.util.find_spec("ruff") is None
+          assert not os.access(sys.prefix, os.W_OK), "Application can modify its environment"
+          status = dict(line.split(":", 1) for line in Path("/proc/self/status").read_text().splitlines())
+          assert int(status["CapBnd"].strip(), 16) == 0, "Container retains Linux capabilities"
+          assert status["NoNewPrivs"].strip() == "1", "Privilege escalation is permitted"
+          PY
       - name: Test healthy PostgreSQL
         env:
           EXPECT_POSTGRES: healthy
@@ -142,10 +159,10 @@ jobs:
           MLOPS_TEST_DATABASE: "1"
         run: uv run --frozen --extra web --extra ml pytest -q tests/test_ml_integration.py --no-cov
       - name: Container logs
-        if: always()
+        if: always() && steps.prepare_env.outcome == 'success'
         run: docker compose --profile tasks logs --no-color
       - name: Clean up
-        if: always()
+        if: always() && steps.prepare_env.outcome == 'success'
         run: docker compose --profile tasks down -v
 
   publish:
@@ -164,6 +181,8 @@ jobs:
       image: ${{ steps.image.outputs.name }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Prepare image name and tags
         id: image
         env:

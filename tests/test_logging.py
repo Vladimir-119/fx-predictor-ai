@@ -2,15 +2,48 @@
 
 import json
 import logging
+import sys
 from io import StringIO
 
 from httpx import ASGITransport, AsyncClient
 
-from src.logging_config import REQUEST_ID, JsonFormatter
+from src.logging_config import REQUEST_ID, JsonFormatter, redact_secrets
+
+
+def test_json_logs_hide_credentials_without_losing_exception_context():
+    try:
+        raise RuntimeError(
+            "postgresql://user:db-secret@postgres:5432/app "
+            "password='secret with spaces' Authorization: Bearer access-token "
+            "Authorization: Basic dXNlcjpwYXNz X-Amz-Signature=signed-secret"
+        )
+    except RuntimeError:
+        record = logging.LogRecord(
+            "test", logging.ERROR, __file__, 1, "Connection failed", (), sys.exc_info()
+        )
+    result = JsonFormatter().format(record)
+    parsed = json.loads(result)
+    for secret in (
+        "db-secret",
+        "secret with spaces",
+        "access-token",
+        "dXNlcjpwYXNz",
+        "signed-secret",
+    ):
+        assert secret not in result
+    assert parsed["message"] == "Connection failed"
+    assert "RuntimeError" in parsed["exception"]
+    assert "postgresql://***@postgres:5432/app" in parsed["exception"]
+    assert redact_secrets("a" * 10000) == "a" * 10000
 
 
 async def test_request_logs_success_failure_and_restore_context(client, application, monkeypatch):
-    assert not logging.getLogger("uvicorn.access").handlers
+    access_logger = logging.getLogger("uvicorn.access")
+    assert access_logger.propagate is False
+    # pytest может добавить свои capture-handlers после настройки приложения.
+    assert not any(
+        isinstance(handler.formatter, JsonFormatter) for handler in access_logger.handlers
+    )
     stream = StringIO()
     handler = logging.StreamHandler(stream)
     handler.setFormatter(JsonFormatter())

@@ -19,6 +19,11 @@ services:
       retries: 20
     cpus: "1.0"
     mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   postgres:
@@ -85,6 +90,11 @@ services:
         aliases: [rustfs.localhost]
     cpus: "1.0"
     mem_limit: 1g
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   bucket-init:
@@ -101,6 +111,8 @@ services:
       MLFLOW_BUCKET: ${MLFLOW_BUCKET:-mlflow-artifacts}
       MLFLOW_S3_ENDPOINT_URL: http://rustfs.localhost:${RUSTFS_PORT:-9000}
     command: ["uv", "run", "--no-project", "python", "/app/init-bucket.py"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   mlflow:
     image: fx-predictor-ai-mlflow:local
@@ -132,6 +144,8 @@ services:
       start_period: 30s
     cpus: "1.0"
     mem_limit: 1g
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     logging:
       driver: json-file
       options:
@@ -148,6 +162,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-fx_predictor}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-fx_predictor_ai}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       ENVIRONMENT: ${ENVIRONMENT:-development}
+      ALLOWED_HOSTS: '${ALLOWED_HOSTS:-["localhost","127.0.0.1","app"]}'
       HEALTH_TIMEOUT_SECONDS: ${HEALTH_TIMEOUT_SECONDS:-3}
       DB_POOL_MAX_SIZE: ${DB_POOL_MAX_SIZE:-5}
       MLFLOW_TRACKING_URI: http://mlflow:5000
@@ -168,6 +183,8 @@ services:
         condition: service_healthy
     cpus: "1.0"
     mem_limit: 768m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     logging:
       driver: json-file
       options:
@@ -210,6 +227,13 @@ services:
     stop_grace_period: 75s
     cpus: "1.0"
     mem_limit: 768m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   worker:
@@ -230,6 +254,13 @@ services:
       disable: true
     cpus: "0.50"
     mem_limit: 512m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
 volumes:
